@@ -4,6 +4,8 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useEffect } from "react";
 import Toast from "react-native-toast-message";
 import { Colors } from "@/constants/Colors";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
+import BottomSheet, { BottomSheetModal, BottomSheetModalProvider } from "@gorhom/bottom-sheet";
 
 export default function TabsLayout() {
   const router = useRouter();
@@ -20,7 +22,8 @@ export default function TabsLayout() {
   }, [pathname]);
 
   return (
-    <>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <BottomSheetModalProvider>
       <Tabs
         screenOptions={{
           headerShown: false,
@@ -79,8 +82,15 @@ export default function TabsLayout() {
             ),
           }}
         />
+        <Tabs.Screen
+          name="IniciarVenta"
+          options={{
+            href: null, // 👈 esto lo oculta de la barra de pestañas
+          }}
+        />
       </Tabs>
       <Toast />
-    </>
+      </BottomSheetModalProvider>
+    </GestureHandlerRootView>
   );
 }

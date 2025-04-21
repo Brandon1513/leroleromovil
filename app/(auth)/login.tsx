@@ -51,7 +51,7 @@ export default function LoginScreen() {
     }
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/login`, {
+      const response = await fetch('http://192.168.100.16/api/login', {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -133,7 +133,7 @@ export default function LoginScreen() {
         </TouchableOpacity>
       </View>
 
-      <TouchableOpacity style={loginStyle.button} onPress={pruebaLogin}>
+      <TouchableOpacity style={loginStyle.button} onPress={handleLogin}>
         <Text style={loginStyle.buttonText}>Ingresar</Text>
       </TouchableOpacity>
     </View>

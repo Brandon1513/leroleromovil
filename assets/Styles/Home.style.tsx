@@ -12,7 +12,7 @@ export const homeStyle = StyleSheet.create({
         fontSize: 25,
         fontWeight: 'bold',
         marginBottom: 20,
-        color: '#333',
+        color: Colors.light.primario,
         textAlign: 'center'
       },
       grid: {

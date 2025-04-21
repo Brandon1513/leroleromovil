@@ -26,7 +26,7 @@ export default function PerfilScreen() {
       if (!token) return router.replace("/(auth)/login");
 
       try {
-        const res = await fetch("http://192.168.1.222/api/me", {
+        const res = await fetch("http://192.168.100.16/api/me", {
           headers: {
             Accept: "application/json",
             Authorization: `Bearer ${token}`,
@@ -59,7 +59,7 @@ export default function PerfilScreen() {
     const token = await AsyncStorage.getItem("authToken");
 
     try {
-      const res = await fetch("http://192.168.1.222/api/update-password", {
+      const res = await fetch("http://192.168.100.16/api/update-password", {
         method: "POST",
         headers: {
           Accept: "application/json",
