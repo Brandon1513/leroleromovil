@@ -1,26 +1,28 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   View,
   Text,
   FlatList,
   StyleSheet,
   TextInput,
-  SafeAreaView
+  SafeAreaView,
+  RefreshControl
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/Colors';
-
+import { API_BASE_URL } from '@/constants/Config';
 
 export default function InventarioScreen() {
   const [inventario, setInventario] = useState([]);
   const [busqueda, setBusqueda] = useState('');
+  const [refreshing, setRefreshing] = useState(false); // <- agregado
 
-  useEffect(() => {
-    const fetchInventario = async () => {
-      const token = await AsyncStorage.getItem('authToken');
+  const fetchInventario = async () => {
+    const token = await AsyncStorage.getItem('authToken');
 
-      const res = await fetch('http://192.168.100.16/api/inventario', {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/inventario`, {
         headers: {
           Accept: 'application/json',
           Authorization: `Bearer ${token}`,
@@ -29,8 +31,19 @@ export default function InventarioScreen() {
 
       const data = await res.json();
       setInventario(data);
-    };
+    } catch (error) {
+      console.error('Error al obtener inventario', error);
+    } finally {
+      setRefreshing(false); // <- detener el refresh si estaba en pull-to-refresh
+    }
+  };
 
+  useEffect(() => {
+    fetchInventario();
+  }, []);
+
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
     fetchInventario();
   }, []);
 
@@ -55,18 +68,26 @@ export default function InventarioScreen() {
         renderItem={({ item }) => (
           <View style={styles.card}>
             <Text style={styles.nombre}>
-              <Ionicons name="pricetag-outline" size={16} color={Colors.light.primario}  /> {item.producto.nombre}
+              <Ionicons name="pricetag-outline" size={16} color={Colors.light.primario} /> {item.producto.nombre}
             </Text>
             <Text style={styles.text}>
-              <Ionicons name="cube-outline" size={14} color={Colors.light.primario}  /> Cantidad: {item.cantidad}
+              <Ionicons name="cube-outline" size={14} color={Colors.light.primario} /> Cantidad: {item.cantidad}
             </Text>
             <Text style={styles.text}>
-              <Ionicons name="calendar-outline" size={14} color={Colors.light.primario}  /> Caduca: {item.producto.fecha_caducidad}
+              <Ionicons name="calendar-outline" size={14} color={Colors.light.primario} /> Caduca: {item.producto.fecha_caducidad}
             </Text>
           </View>
         )}
         ListEmptyComponent={
           <Text style={styles.vacio}>No se encontraron productos</Text>
+        }
+        refreshControl={
+          <RefreshControl
+                      refreshing={refreshing}
+                      onRefresh={onRefresh}
+                      colors={[Colors.light.primario]} // <- aquí defines el color del spinner
+                      tintColor={Colors.light.primario} // <- para iOS
+                    /> // <- lo conectamos aquí
         }
       />
     </SafeAreaView>

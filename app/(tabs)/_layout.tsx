@@ -88,6 +88,25 @@ export default function TabsLayout() {
             href: null, // 👈 esto lo oculta de la barra de pestañas
           }}
         />
+        <Tabs.Screen
+          name="historial-ventas"
+          options={{
+            href: null, // 👈 esto lo oculta de la barra de pestañas
+          }}
+        />
+        <Tabs.Screen
+          name="ticket"
+          options={{
+            href: null, // 👈 esto lo oculta de la barra de pestañas
+          }}
+        />
+         <Tabs.Screen
+          name="ruta"
+          options={{
+            href: null, // 👈 esto lo oculta de la barra de pestañas
+          }}
+        />
+       
       </Tabs>
       <Toast />
       </BottomSheetModalProvider>

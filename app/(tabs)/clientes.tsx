@@ -1,67 +1,99 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   View,
   Text,
   TextInput,
   StyleSheet,
   FlatList,
-  ActivityIndicator
+  ActivityIndicator,
+  TouchableOpacity,
+  Alert,
+  RefreshControl,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/Colors';
+import { useRouter } from 'expo-router';
+import { API_BASE_URL } from '@/constants/Config';
 
 export default function ClientesScreen() {
   const [clientes, setClientes] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false); // <-- agregamos esto
   const [busqueda, setBusqueda] = useState('');
+  const router = useRouter();
+
+  const fetchClientes = async () => {
+    const token = await AsyncStorage.getItem('authToken');
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/clientes`, {
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${token}`
+        }
+      });
+      const data = await res.json();
+      setClientes(data);
+    } catch (error) {
+      console.error('Error al obtener clientes', error);
+    } finally {
+      setLoading(false);
+      setRefreshing(false); // <-- detener el refresh si viene de un pull-to-refresh
+    }
+  };
 
   useEffect(() => {
-    const fetchClientes = async () => {
-      const token = await AsyncStorage.getItem('authToken');
-      try {
-        const res = await fetch('http://192.168.100.16/api/clientes', {
-          headers: {
-            Accept: 'application/json',
-            Authorization: `Bearer ${token}`
-          }
-        });
-        const data = await res.json();
-        setClientes(data);
-      } catch (error) {
-        console.error('Error al obtener clientes', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
     fetchClientes();
   }, []);
 
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    fetchClientes();
+  }, []);
+
+  const navegarAHistorial = (cliente) => {
+    Alert.alert(
+      'Historial de ventas',
+      `¿Deseas ver el historial de ventas de ${cliente.nombre}?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Aceptar',
+          onPress: () => {
+            const clienteParam = encodeURIComponent(JSON.stringify(cliente));
+            router.push(`/historial-ventas?cliente=${clienteParam}`);
+          }
+        }
+      ]
+    );
+  };
+
   const renderItem = ({ item }) => (
-    <View style={styles.card}>
-      <View style={styles.row}>
-        <Ionicons name="person-circle-outline" size={24} color={Colors.light.primario} />
-        <Text style={styles.name}>{item.nombre}</Text>
+    <TouchableOpacity onLongPress={() => navegarAHistorial(item)}>
+      <View style={styles.card}>
+        <View style={styles.row}>
+          <Ionicons name="person-circle-outline" size={24} color={Colors.light.primario} />
+          <Text style={styles.name}>{item.nombre}</Text>
+        </View>
+        <View style={styles.row}>
+          <Ionicons name="call-outline" size={18} color="#666" />
+          <Text style={styles.text}>{item.telefono || 'Sin teléfono'}</Text>
+        </View>
+        <View style={styles.row}>
+          <Ionicons name="pricetag-outline" size={18} color="#666" />
+          <Text style={styles.text}>
+            {item.nivel_precio?.nombre || 'Sin nivel de precio'}
+          </Text>
+        </View>
       </View>
-      <View style={styles.row}>
-        <Ionicons name="call-outline" size={18} color="#666" />
-        <Text style={styles.text}>{item.telefono || 'Sin teléfono'}</Text>
-      </View>
-      <View style={styles.row}>
-        <Ionicons name="pricetag-outline" size={18} color="#666" />
-        <Text style={styles.text}>
-          {item.nivel_precio?.nombre || 'Sin nivel de precio'}
-        </Text>
-      </View>
-    </View>
+    </TouchableOpacity>
   );
 
   const clientesFiltrados = clientes.filter(c =>
     c.nombre.toLowerCase().includes(busqueda.toLowerCase())
   );
 
-  if (loading) {
+  if (loading && !refreshing) { // <-- importante: solo cuando no está refrescando
     return (
       <View style={styles.centered}>
         <ActivityIndicator size="large" color={Colors.light.primario} />
@@ -88,6 +120,14 @@ export default function ClientesScreen() {
         keyExtractor={(item) => item.id.toString()}
         renderItem={renderItem}
         contentContainerStyle={styles.list}
+        refreshControl={
+          <RefreshControl
+                      refreshing={refreshing}
+                      onRefresh={onRefresh}
+                      colors={[Colors.light.primario]} // <- aquí defines el color del spinner
+                      tintColor={Colors.light.primario} // <- para iOS
+                    /> // <-- aquí se integra
+        }
       />
     </View>
   );

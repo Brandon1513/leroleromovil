@@ -34,17 +34,27 @@ const options = [
     label: 'Perfil',
     icon: <Ionicons name="person-outline" size={32} color={Colors.light.primario} />,
     route: '/(tabs)/perfil'
-  }
+  },
+  {
+    id: '5',
+    label: 'Rutas',
+    icon: <Ionicons name="map-outline" size={32} color={Colors.light.primario} />,
+    route: '/(tabs)/ruta'
+  },
+  
 ];
 
 export default function HomeScreen() {
   const router = useRouter();
 
-  const renderItem = ({ item }: any) => (
+  const renderItem = ({ item, index }: { item: any, index: number }) => (
     <TouchableOpacity
-      style={homeStyle.card}
-      onPress={() => router.push(item.route)}
-    >
+    style={[
+      homeStyle.card,
+      options.length % 2 !== 0 && index === options.length - 1 && homeStyle.cardFullWidth,
+    ]}
+    onPress={() => router.push(item.route)}
+  >
       {item.icon}
       <Text style={homeStyle.label}>{item.label}</Text>
     </TouchableOpacity>

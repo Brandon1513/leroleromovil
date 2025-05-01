@@ -15,7 +15,8 @@
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
-      }
+      },
+      "package": "com.brandondasavena.lerolero"
     },
     "web": {
       "bundler": "metro",
@@ -33,10 +34,20 @@
           "backgroundColor": "#ffffff"
         }
       ],
-      "expo-font"
+      "expo-font",
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "extra": {
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "38b779eb-54ab-4c80-a6a9-4a4c083e66ec"
+      }
+    },
+    "owner": "brandondasavena"
   }
 }

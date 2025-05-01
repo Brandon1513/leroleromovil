@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -6,22 +6,26 @@ import {
   TextInput,
   TouchableOpacity,
   Alert,
-  StyleSheet
+  StyleSheet,
+  RefreshControl
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
+import * as Location from 'expo-location';
 import { Colors } from '@/constants/Colors';
+import { API_BASE_URL } from '@/constants/Config';
 
 export default function Ventas() {
   const [clientes, setClientes] = useState([]);
   const [busqueda, setBusqueda] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
   const router = useRouter();
 
-  useEffect(() => {
-    const fetchClientes = async () => {
+  const fetchClientes = async () => {
+    try {
       const token = await AsyncStorage.getItem('authToken');
-      const res = await fetch('http://192.168.100.16/api/clientes', {
+      const res = await fetch(`${API_BASE_URL}/api/clientes`, {
         headers: {
           Accept: 'application/json',
           Authorization: `Bearer ${token}`,
@@ -29,12 +33,60 @@ export default function Ventas() {
       });
       const data = await res.json();
       setClientes(data);
-    };
+    } catch (error) {
+      console.error('Error al cargar clientes:', error.message);
+    }
+  };
 
+  useEffect(() => {
     fetchClientes();
   }, []);
 
-  const iniciarVenta = (cliente) => {
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await fetchClientes();
+    setRefreshing(false);
+  }, []);
+
+  const calcularDistancia = (lat1, lon1, lat2, lon2) => {
+    const R = 6371e3;
+    const toRad = (value) => (value * Math.PI) / 180;
+    const φ1 = toRad(lat1);
+    const φ2 = toRad(lat2);
+    const Δφ = toRad(lat2 - lat1);
+    const Δλ = toRad(lon2 - lon1);
+    const a =
+      Math.sin(Δφ / 2) ** 2 +
+      Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  };
+
+  const iniciarVenta = async (cliente) => {
+    const { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permiso requerido', 'Se necesita acceso a la ubicación para continuar.');
+      return;
+    }
+
+    const ubicacion = await Location.getCurrentPositionAsync({});
+    const { latitude, longitude } = ubicacion.coords;
+
+    const distancia = calcularDistancia(
+      latitude,
+      longitude,
+      cliente.latitud,
+      cliente.longitud
+    );
+
+    if (distancia > 100) {
+      Alert.alert(
+        'Ubicación incorrecta',
+        `Debes estar cerca del cliente para iniciar la venta.\nEstás a ${distancia.toFixed(0)} metros.`
+      );
+      return;
+    }
+
     Alert.alert(
       'Iniciar venta',
       `¿Deseas iniciar una venta para ${cliente.nombre}?`,
@@ -69,6 +121,14 @@ export default function Ventas() {
       <FlatList
         data={clientesFiltrados}
         keyExtractor={(item) => item.id.toString()}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={[Colors.light.primario]} // <- aquí defines el color del spinner
+            tintColor={Colors.light.primario} // <- para iOS
+          />
+        }
         renderItem={({ item }) => (
           <TouchableOpacity
             onLongPress={() => iniciarVenta(item)}

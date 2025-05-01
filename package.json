@@ -44,7 +44,14 @@
     "react-native-screens": "~4.4.0",
     "react-native-toast-message": "^2.2.1",
     "react-native-web": "~0.19.13",
-    "react-native-webview": "13.12.5"
+    "react-native-webview": "13.12.5",
+    "@react-native-community/datetimepicker": "8.2.0",
+    "expo-clipboard": "~7.0.1",
+    "expo-print": "~14.0.3",
+    "expo-sharing": "~13.0.1",
+    "expo-file-system": "~18.0.12",
+    "expo-asset": "~11.0.5",
+    "expo-location": "~18.0.10"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",

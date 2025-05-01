@@ -38,5 +38,9 @@ export const homeStyle = StyleSheet.create({
         fontSize: 15,
         fontWeight: '800',
         color: Colors.light.text,
-      }
+      },
+      cardFullWidth: {
+        width: '90%', // o '100%' si quieres sin margen lateral
+        alignSelf: 'center',
+      },
 })

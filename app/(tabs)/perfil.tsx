@@ -11,6 +11,7 @@ import { useRouter } from "expo-router";
 import Toast from "react-native-toast-message";
 import { Ionicons } from "@expo/vector-icons";
 import { perfilStyle } from "@/assets/Styles/Perfil.style";
+import { API_BASE_URL } from "@/constants/Config";
 
 export default function PerfilScreen() {
   const router = useRouter();
@@ -26,7 +27,7 @@ export default function PerfilScreen() {
       if (!token) return router.replace("/(auth)/login");
 
       try {
-        const res = await fetch("http://192.168.100.16/api/me", {
+        const res = await fetch(`${API_BASE_URL}/api/me`, {
           headers: {
             Accept: "application/json",
             Authorization: `Bearer ${token}`,
@@ -59,7 +60,7 @@ export default function PerfilScreen() {
     const token = await AsyncStorage.getItem("authToken");
 
     try {
-      const res = await fetch("http://192.168.100.16/api/update-password", {
+      const res = await fetch(`${API_BASE_URL}/api/update-password`, {
         method: "POST",
         headers: {
           Accept: "application/json",
