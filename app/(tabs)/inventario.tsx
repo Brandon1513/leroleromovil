@@ -5,18 +5,19 @@ import {
   FlatList,
   StyleSheet,
   TextInput,
-  SafeAreaView,
-  RefreshControl
+  RefreshControl,
+  Image
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/Colors';
 import { API_BASE_URL } from '@/constants/Config';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function InventarioScreen() {
   const [inventario, setInventario] = useState([]);
   const [busqueda, setBusqueda] = useState('');
-  const [refreshing, setRefreshing] = useState(false); // <- agregado
+  const [refreshing, setRefreshing] = useState(false);
 
   const fetchInventario = async () => {
     const token = await AsyncStorage.getItem('authToken');
@@ -30,11 +31,20 @@ export default function InventarioScreen() {
       });
 
       const data = await res.json();
-      setInventario(data);
+      console.log('Respuesta inventario:', data);
+
+      if (Array.isArray(data)) {
+        setInventario(data);
+      } else {
+        console.warn('Respuesta inesperada:', data);
+        setInventario([]);
+      }
+
     } catch (error) {
-      console.error('Error al obtener inventario', error);
+      console.error('Error al obtener inventario:', error);
+      setInventario([]);
     } finally {
-      setRefreshing(false); // <- detener el refresh si estaba en pull-to-refresh
+      setRefreshing(false);
     }
   };
 
@@ -47,9 +57,12 @@ export default function InventarioScreen() {
     fetchInventario();
   }, []);
 
-  const inventarioFiltrado = inventario.filter(item =>
-    item.producto.nombre.toLowerCase().includes(busqueda.toLowerCase())
-  );
+  // Actualiza el filtrado según el nuevo formato
+  const inventarioFiltrado = Array.isArray(inventario)
+    ? inventario.filter(item =>
+        item.producto?.nombre?.toLowerCase().includes(busqueda.toLowerCase())
+      )
+    : [];
 
   return (
     <SafeAreaView style={styles.container}>
@@ -64,17 +77,30 @@ export default function InventarioScreen() {
 
       <FlatList
         data={inventarioFiltrado}
-        keyExtractor={(item) => item.id.toString()}
+        keyExtractor={(item, index) => index.toString()}
         renderItem={({ item }) => (
           <View style={styles.card}>
+            {item.producto.imagen_url && (
+              <Image
+                source={{ uri: item.producto.imagen_url }}
+                style={styles.image}
+                resizeMode="contain"
+              />
+            )}
             <Text style={styles.nombre}>
               <Ionicons name="pricetag-outline" size={16} color={Colors.light.primario} /> {item.producto.nombre}
+            </Text>
+            <Text style={styles.text}>
+              <Ionicons name="barcode-outline" size={14} color={Colors.light.primario} /> Lote: {item.lote}
+            </Text>
+            <Text style={styles.text}>
+              <Ionicons name="calendar-outline" size={14} color={Colors.light.primario} /> Caduca: {item.fecha_caducidad || 'N/D'}
             </Text>
             <Text style={styles.text}>
               <Ionicons name="cube-outline" size={14} color={Colors.light.primario} /> Cantidad: {item.cantidad}
             </Text>
             <Text style={styles.text}>
-              <Ionicons name="calendar-outline" size={14} color={Colors.light.primario} /> Caduca: {item.producto.fecha_caducidad}
+              <Ionicons name="cash-outline" size={14} color={Colors.light.primario} /> Precio: ${Number(item.producto.precio).toFixed(2)}
             </Text>
           </View>
         )}
@@ -83,11 +109,11 @@ export default function InventarioScreen() {
         }
         refreshControl={
           <RefreshControl
-                      refreshing={refreshing}
-                      onRefresh={onRefresh}
-                      colors={[Colors.light.primario]} // <- aquí defines el color del spinner
-                      tintColor={Colors.light.primario} // <- para iOS
-                    /> // <- lo conectamos aquí
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={[Colors.light.primario]}
+            tintColor={Colors.light.primario}
+          />
         }
       />
     </SafeAreaView>
@@ -142,5 +168,11 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     color: '#888',
     fontStyle: 'italic'
+  },
+  image: {
+    width: '100%',
+    height: 150,
+    borderRadius: 8,
+    marginBottom: 8,
   }
 });

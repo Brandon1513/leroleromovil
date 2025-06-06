@@ -12,18 +12,18 @@ import { Colors } from '@/constants/Colors';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE_URL } from '@/constants/Config';
 import Toast from 'react-native-toast-message';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function CambiosModal({
   visible,
   productos,
   cambiosVenta,
   setCambiosVenta,
-  onConfirmar,
+  onConfirmar,       // ✅ Esta función la usaremos para registrar la venta
   onClose,
-  finalizarVenta,
 }) {
   const modificarCantidad = (item, incremento) => {
-    const index = cambiosVenta.findIndex((p) => p.producto_id === item.producto.id);
+    const index = cambiosVenta.findIndex((p) => p.producto_id === item.producto_id);
     if (index >= 0) {
       const copia = [...cambiosVenta];
       const nuevaCantidad = Math.max(0, copia[index].cantidad + incremento);
@@ -33,10 +33,12 @@ export default function CambiosModal({
       setCambiosVenta([
         ...cambiosVenta,
         {
-          producto_id: item.producto.id,
+          producto_id: item.producto_id,
           producto: item.producto.nombre,
           cantidad: 1,
           motivo: '',
+          lote: item.lote || null,
+          fecha_caducidad: item.fecha_caducidad || null,
         },
       ]);
     }
@@ -45,12 +47,13 @@ export default function CambiosModal({
   const cambiarMotivo = (item, motivo) => {
     setCambiosVenta(prev =>
       prev.map(p =>
-        p.producto_id === item.producto.id ? { ...p, motivo } : p
+        p.producto_id === item.producto_id ? { ...p, motivo } : p
       )
     );
   };
 
-  const getCambio = (producto_id) => cambiosVenta.find(p => p.producto_id === producto_id) || { cantidad: 0, motivo: '' };
+  const getCambio = (producto_id) =>
+    cambiosVenta.find((p) => p.producto_id === producto_id) || { cantidad: 0, motivo: '' };
 
   const enviarCambios = async () => {
     const cambiosValidos = cambiosVenta.filter(c => c.cantidad > 0 && c.motivo);
@@ -71,13 +74,12 @@ export default function CambiosModal({
         text1: 'No hay cambios registrados',
       });
       onClose();
-      finalizarVenta();
+      onConfirmar(); // ✅ Aquí se asegura de registrar la venta
       return;
     }
 
     try {
       const token = await AsyncStorage.getItem('authToken');
-
       const response = await fetch(`${API_BASE_URL}/api/rechazos`, {
         method: 'POST',
         headers: {
@@ -89,15 +91,16 @@ export default function CambiosModal({
       });
 
       if (response.ok) {
-        Toast.show({ type: 'success', text1: '✅ Cambios registrados correctamente' });
+        Toast.show({ type: 'success', text1: '✅ Cambios registrados correctamente', visibilityTime: 5000, });
         onClose();
-        finalizarVenta();
+        onConfirmar(); // ✅ Llamamos la función que guarda la venta y descuenta inventario
       } else {
         const data = await response.json();
         Toast.show({
           type: 'error',
           text1: 'Error al guardar cambios',
           text2: data.message || 'Ocurrió un error',
+          visibilityTime: 4000,
         });
       }
     } catch (error) {
@@ -111,15 +114,17 @@ export default function CambiosModal({
 
   return (
     <Modal animationType="slide" transparent visible={visible} onRequestClose={onClose}>
-      <View style={styles.overlay}>
+      <SafeAreaView style={styles.overlay}>
         <View style={styles.container}>
           <Text style={styles.title}>♻️ Productos en Cambio</Text>
 
           <FlatList
             data={productos}
-            keyExtractor={(item) => item.id.toString()}
+            keyExtractor={(item, index) =>
+              (item.producto_id ? item.producto_id.toString() : index.toString())
+            }
             renderItem={({ item }) => {
-              const cambio = getCambio(item.producto.id);
+              const cambio = getCambio(item.producto_id);
               return (
                 <View style={styles.card}>
                   <Text style={styles.nombre}>{item.producto.nombre}</Text>
@@ -152,67 +157,12 @@ export default function CambiosModal({
 
           <TouchableOpacity
             style={styles.confirmarBtn}
-            onPress={async () => {
-              const cambiosValidos = cambiosVenta.filter(c => c.cantidad > 0 && c.motivo);
-              const cambiosIncompletos = cambiosVenta.filter(c => c.cantidad > 0 && !c.motivo);
-
-              if (cambiosIncompletos.length > 0) {
-                Toast.show({
-                  type: 'error',
-                  text1: 'Motivo requerido',
-                  text2: 'Selecciona un motivo para todos los productos con cantidad mayor a 0.',
-                });
-                return;
-              }
-
-              if (cambiosValidos.length === 0) {
-                Toast.show({
-                  type: 'info',
-                  text1: 'No hay cambios registrados',
-                });
-                onClose();
-                onConfirmar(); // <-- se llama aquí para asegurar que la venta sí se registra
-                return;
-              }
-
-              try {
-                const token = await AsyncStorage.getItem('authToken');
-                const response = await fetch(`${API_BASE_URL}/api/rechazos`, {
-                  method: 'POST',
-                  headers: {
-                    Accept: 'application/json',
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${token}`,
-                  },
-                  body: JSON.stringify({ cambios: cambiosValidos }),
-                });
-
-                if (response.ok) {
-                  Toast.show({ type: 'success', text1: '✅ Cambios registrados correctamente' });
-                  onClose();
-                  onConfirmar(); // <-- registrar la venta después de guardar cambios
-                } else {
-                  const data = await response.json();
-                  Toast.show({
-                    type: 'error',
-                    text1: 'Error al guardar cambios',
-                    text2: data.message || 'Ocurrió un error',
-                  });
-                }
-              } catch (error) {
-                Toast.show({
-                  type: 'error',
-                  text1: 'Error de red',
-                  text2: error.message,
-                });
-              }
-            }}
+            onPress={enviarCambios}
           >
             <Text style={styles.confirmarText}>Guardar cambios y continuar</Text>
           </TouchableOpacity>
-
         </View>
-      </View>
+      </SafeAreaView>
     </Modal>
   );
 }

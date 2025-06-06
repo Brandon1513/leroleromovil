@@ -9,6 +9,7 @@ import { Colors } from '@/constants/Colors';
 import { homeStyle } from '@/assets/Styles/Home.style';
 import { Ionicons, Feather } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 const options = [
   {
@@ -41,7 +42,6 @@ const options = [
     icon: <Ionicons name="map-outline" size={32} color={Colors.light.primario} />,
     route: '/(tabs)/ruta'
   },
-  
 ];
 
 export default function HomeScreen() {
@@ -49,19 +49,19 @@ export default function HomeScreen() {
 
   const renderItem = ({ item, index }: { item: any, index: number }) => (
     <TouchableOpacity
-    style={[
-      homeStyle.card,
-      options.length % 2 !== 0 && index === options.length - 1 && homeStyle.cardFullWidth,
-    ]}
-    onPress={() => router.push(item.route)}
-  >
+      style={[
+        homeStyle.card,
+        options.length % 2 !== 0 && index === options.length - 1 && homeStyle.cardFullWidth,
+      ]}
+      onPress={() => router.push(item.route)}
+    >
       {item.icon}
       <Text style={homeStyle.label}>{item.label}</Text>
     </TouchableOpacity>
   );
 
   return (
-    <View style={homeStyle.container}>
+    <SafeAreaView style={homeStyle.container}>
       <Text style={homeStyle.title}>Bienvenido 👋</Text>
       <FlatList
         data={options}
@@ -70,8 +70,6 @@ export default function HomeScreen() {
         renderItem={renderItem}
         contentContainerStyle={homeStyle.grid}
       />
-    </View>
+    </SafeAreaView>
   );
 }
-
-

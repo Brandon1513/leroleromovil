@@ -15,6 +15,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/Colors';
 import { useRouter } from 'expo-router';
 import { API_BASE_URL } from '@/constants/Config';
+import { SafeAreaView } from 'react-native-safe-area-context';
+
 
 export default function ClientesScreen() {
   const [clientes, setClientes] = useState([]);
@@ -102,7 +104,7 @@ export default function ClientesScreen() {
   }
 
   return (
-    <View style={{ flex: 1 }}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#fff' }}>
       <FlatList
         ListHeaderComponent={
           <View style={styles.headerContainer}>
@@ -129,7 +131,7 @@ export default function ClientesScreen() {
                     /> // <-- aquí se integra
         }
       />
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -140,6 +142,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     borderBottomWidth: 1,
     borderBottomColor: '#eee',
+    borderRadius: 12,
   },
   titulo: {
     fontSize: 22,
@@ -162,6 +165,7 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: '#fff',
+    marginTop: 8,
     padding: 16,
     borderRadius: 12,
     marginBottom: 12,

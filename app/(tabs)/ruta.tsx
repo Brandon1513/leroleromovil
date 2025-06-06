@@ -5,7 +5,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
-  Alert,
   Linking,
   FlatList,
   RefreshControl
@@ -14,6 +13,9 @@ import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Colors } from '@/constants/Colors';
 import { API_BASE_URL } from '@/constants/Config';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
+import Toast from 'react-native-toast-message';
 
 export default function RutaOptimizada() {
   const [clientes, setClientes] = useState([]);
@@ -21,17 +23,52 @@ export default function RutaOptimizada() {
   const [ubicacion, setUbicacion] = useState(null);
   const [visitados, setVisitados] = useState({});
   const [refreshing, setRefreshing] = useState(false);
+  const [botonDeshabilitado, setBotonDeshabilitado] = useState(false);
+
+  const STORAGE_KEYS = {
+    VISITADOS: 'clientes_visitados',
+    RUTA_CERRADA: 'ruta_cerrada',
+    FECHA_ESTADO: 'fecha_estado',
+  };
+
+  const getHoy = () => new Date().toISOString().split('T')[0];
 
   useEffect(() => {
+    cargarEstadoPersistente();
     obtenerDatos();
   }, []);
+
+  const cargarEstadoPersistente = async () => {
+    const fechaGuardada = await AsyncStorage.getItem(STORAGE_KEYS.FECHA_ESTADO);
+    const hoy = getHoy();
+
+    if (fechaGuardada !== hoy) {
+      await AsyncStorage.multiRemove([
+        STORAGE_KEYS.VISITADOS,
+        STORAGE_KEYS.RUTA_CERRADA,
+        STORAGE_KEYS.FECHA_ESTADO,
+      ]);
+      setVisitados({});
+      setBotonDeshabilitado(false);
+      await AsyncStorage.setItem(STORAGE_KEYS.FECHA_ESTADO, hoy);
+    } else {
+      const visitadosGuardados = await AsyncStorage.getItem(STORAGE_KEYS.VISITADOS);
+      const rutaCerrada = await AsyncStorage.getItem(STORAGE_KEYS.RUTA_CERRADA);
+      if (visitadosGuardados) setVisitados(JSON.parse(visitadosGuardados));
+      if (rutaCerrada === 'true') setBotonDeshabilitado(true);
+    }
+  };
 
   const obtenerDatos = async () => {
     try {
       setRefreshing(true);
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Permiso denegado', 'No se puede acceder a la ubicación');
+        Toast.show({
+          type: 'error',
+          text1: 'Permiso denegado',
+          text2: 'No se puede acceder a la ubicación',
+        });
         return;
       }
 
@@ -48,11 +85,23 @@ export default function RutaOptimizada() {
       const data = await res.json();
       setClientes(data);
     } catch (error) {
-      Alert.alert('Error', 'No se pudo obtener la ubicación o clientes');
+      Toast.show({
+        type: 'error',
+        text1: 'Error',
+        text2: 'No se pudo obtener la ubicación o clientes',
+      });
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
+  };
+
+  const guardarVisitados = async (visitadosActualizados) => {
+    setVisitados(visitadosActualizados);
+    await AsyncStorage.multiSet([
+      [STORAGE_KEYS.VISITADOS, JSON.stringify(visitadosActualizados)],
+      [STORAGE_KEYS.FECHA_ESTADO, getHoy()],
+    ]);
   };
 
   const verRutaCliente = (cliente) => {
@@ -64,24 +113,20 @@ export default function RutaOptimizada() {
   };
 
   const marcarComoVisitado = (clienteId) => {
-    Alert.alert(
-      '¿Finalizar visita?',
-      '¿Deseas marcar este cliente como visitado?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Confirmar',
-          onPress: () => {
-            setVisitados(prev => ({ ...prev, [clienteId]: true }));
-          }
-        }
-      ]
-    );
+    const actualizados = { ...visitados, [clienteId]: true };
+    guardarVisitados(actualizados);
+    Toast.show({
+      type: 'success',
+      text1: 'Cliente visitado',
+      text2: 'Marcado como visitado con éxito',
+    });
   };
 
   const todosVisitados = clientes.length > 0 && clientes.every(cliente => visitados[cliente.id]);
 
   const solicitarCierreRuta = async () => {
+    setBotonDeshabilitado(true);
+
     const token = await AsyncStorage.getItem('authToken');
 
     try {
@@ -91,21 +136,37 @@ export default function RutaOptimizada() {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({
-          inventario_final: [],  // Aquí podrías reemplazar si capturas inventario final
-          cambios: []            // Igual para productos en cambio
-        })
+        body: JSON.stringify({})
       });
 
       const data = await res.json();
 
       if (res.ok) {
-        Alert.alert("✅ Éxito", "La solicitud de cierre fue enviada.");
+        await AsyncStorage.multiSet([
+          [STORAGE_KEYS.RUTA_CERRADA, 'true'],
+          [STORAGE_KEYS.FECHA_ESTADO, getHoy()],
+        ]);
+
+        Toast.show({
+          type: 'success',
+          text1: '✅ Ruta finalizada',
+          text2: 'La solicitud de cierre fue enviada correctamente',
+        });
       } else {
-        Alert.alert("⚠️ Error", data.message || "No se pudo enviar la solicitud.");
+        Toast.show({
+          type: 'error',
+          text1: '❌ Error al finalizar ruta',
+          text2: data.message || 'No se pudo enviar la solicitud',
+        });
+        setBotonDeshabilitado(false);
       }
     } catch (error) {
-      Alert.alert("🚫 Error", "Error de red al enviar la solicitud.");
+      Toast.show({
+        type: 'error',
+        text1: '🚫 Error de red',
+        text2: 'No se pudo contactar con el servidor',
+      });
+      setBotonDeshabilitado(false);
     }
   };
 
@@ -128,7 +189,7 @@ export default function RutaOptimizada() {
   );
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container}>
       <Text style={styles.titulo}>🗺️ Ruta Optimizada</Text>
 
       {loading ? (
@@ -152,17 +213,20 @@ export default function RutaOptimizada() {
             ListFooterComponent={
               todosVisitados && (
                 <TouchableOpacity
-                  style={styles.finalizarBtn}
+                  style={[styles.finalizarBtn, botonDeshabilitado && { backgroundColor: '#aaa' }]}
                   onPress={solicitarCierreRuta}
+                  disabled={botonDeshabilitado}
                 >
-                  <Text style={styles.finalizarText}>🚩 Finalizar Ruta</Text>
+                  <Text style={styles.finalizarText}>
+                    <Ionicons name="flag-outline" size={18} color="#fff" /> Finalizar Ruta
+                  </Text>
                 </TouchableOpacity>
               )
             }
           />
         </>
       )}
-    </View>
+    </SafeAreaView>
   );
 }
 

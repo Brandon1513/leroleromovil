@@ -6,6 +6,7 @@ import Toast from "react-native-toast-message";
 import { Colors } from "@/constants/Colors";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import BottomSheet, { BottomSheetModal, BottomSheetModalProvider } from "@gorhom/bottom-sheet";
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 export default function TabsLayout() {
   const router = useRouter();
@@ -22,6 +23,7 @@ export default function TabsLayout() {
   }, [pathname]);
 
   return (
+    <SafeAreaProvider>
     <GestureHandlerRootView style={{ flex: 1 }}>
       <BottomSheetModalProvider>
       <Tabs
@@ -111,5 +113,6 @@ export default function TabsLayout() {
       <Toast />
       </BottomSheetModalProvider>
     </GestureHandlerRootView>
+    </SafeAreaProvider>
   );
 }

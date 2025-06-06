@@ -15,6 +15,8 @@ import { useRouter } from 'expo-router';
 import * as Location from 'expo-location';
 import { Colors } from '@/constants/Colors';
 import { API_BASE_URL } from '@/constants/Config';
+import { SafeAreaView } from 'react-native-safe-area-context';
+
 
 export default function Ventas() {
   const [clientes, setClientes] = useState([]);
@@ -108,8 +110,8 @@ export default function Ventas() {
   );
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.titulo}>Nueva Venta</Text>
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#fff' }}>
+      <Text style={styles.titulo}>🛒 Nueva Venta</Text>
 
       <TextInput
         placeholder="Buscar cliente..."
@@ -134,19 +136,22 @@ export default function Ventas() {
             onLongPress={() => iniciarVenta(item)}
             style={styles.card}
           >
-            <Text style={styles.nombre}>
-              <Ionicons name="person-circle-outline" size={18} color={Colors.light.primario} /> {item.nombre}
-            </Text>
-            <Text>
-              <Ionicons name="call-outline" size={14} color={Colors.light.primario} /> {item.telefono}
-            </Text>
-            <Text>
-              <Ionicons name="pricetag-outline" size={14} color={Colors.light.primario} /> {item.negocio}
-            </Text>
+            <View style={styles.row}>
+              <Ionicons name="person-circle-outline" size={20} color={Colors.light.primario} />
+              <Text style={[styles.text, styles.bold]}>{item.nombre}</Text>
+            </View>
+            <View style={styles.row}>
+              <Ionicons name="call-outline" size={16} color={Colors.light.primario} />
+              <Text style={styles.text}>{item.telefono}</Text>
+            </View>
+            <View style={styles.row}>
+              <Ionicons name="pricetag-outline" size={16} color={Colors.light.primario} />
+              <Text style={styles.text}>{item.nivel_precio?.nombre}</Text>
+            </View>
           </TouchableOpacity>
         )}
       />
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -156,30 +161,49 @@ const styles = StyleSheet.create({
     backgroundColor: '#f2f2f2',
     padding: 16
   },
-  titulo: {
-    fontSize: 20,
+  bold: {
     fontWeight: 'bold',
+  },
+  titulo: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: Colors.light.primario,
+    textAlign: 'center',
     marginBottom: 12,
-    color: Colors.light.primario
   },
   input: {
-    backgroundColor: '#fff',
-    padding: 12,
-    borderRadius: 8,
-    borderColor: '#ddd',
+    backgroundColor: '#f2f2f2',
+    borderRadius: 10,
+    padding: 10,
     borderWidth: 1,
+    borderColor: '#ccc',
+    marginHorizontal: 16,
     marginBottom: 12,
   },
   card: {
     backgroundColor: '#fff',
     padding: 16,
-    borderRadius: 10,
-    marginBottom: 10,
+    borderRadius: 12,
+    marginHorizontal: 16,
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
     elevation: 2,
   },
   nombre: {
     fontWeight: 'bold',
     fontSize: 16,
     marginBottom: 4,
+  },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  text: {
+    fontSize: 14,
+    marginLeft: 8,
+    color: '#555',
   },
 });
