@@ -1,3 +1,4 @@
+// Ticket.tsx
 import React from 'react';
 import {
   View,
@@ -18,28 +19,81 @@ const LOGO_BASE64 = 'data:image/png;base64,iVBORw0KGgoAAAANS...'; // reemplaza p
 
 export default function Ticket() {
   const { cliente, productos, total, observaciones, fecha, cambios } = useLocalSearchParams();
-  const cambiosList = cambios ? JSON.parse(cambios) : [];
+  const cambiosList = cambios ? JSON.parse(cambios as string) : [];
 
   if (!cliente || !productos) {
     return <Text style={styles.error}>Error: No hay información de la venta.</Text>;
   }
 
-  const clienteObj = JSON.parse(cliente);
-  const productosList = JSON.parse(productos);
-  const fechaFormateada = new Date(fecha).toLocaleString();
+  const clienteObj = JSON.parse(cliente as string);
+  const productosList = JSON.parse(productos as string);
+  const fechaFormateada = new Date(fecha as string).toLocaleString();
+
+  // Subtotales y ahorro para vista previa y PDF
+  const subtotalProductos = productosList
+    .filter((p: any) => p.producto_id && p.producto)
+    .reduce((acc: number, p: any) => acc + p.cantidad * Number(p.producto?.precio || 0), 0);
+
+  const subtotalPromos = productosList
+    .filter((p: any) => p.promocion_id)
+    .reduce((acc: number, p: any) => acc + p.cantidad * Number(p.precio_promocion || 0), 0);
+
+  const ahorroPromos = productosList
+    .filter((p: any) => p.promocion_id)
+    .reduce((acc: number, p: any) => {
+      const precioNormalPack = (p.productos || []).reduce(
+        (s: number, sp: any) => s + Number(sp.precio || 0) * Number(sp?.pivot?.cantidad || 1),
+        0
+      );
+      return acc + p.cantidad * Math.max(precioNormalPack - Number(p.precio_promocion || 0), 0);
+    }, 0);
+
+  const totalCalculado = subtotalProductos + subtotalPromos; // coincide con lo que enviaste
 
   const generarHTML = () => {
-    const resumenProductos = productosList.map(p => `
-      <div>
-        <strong>${p.producto.nombre}</strong> x ${p.cantidad} = $${(p.cantidad * p.producto.precio).toFixed(2)}
-        <div style="font-size:10px; margin-left: 12px;">
-          Lote: ${p.lote || 'N/D'} - Caduca: ${p.fecha_caducidad || 'N/D'}
-        </div>
+    const resumenProductos = productosList.map((p: any) => {
+      // Producto normal
+      if (p.producto_id && p.producto) {
+        return `
+          <div style="margin-bottom:6px">
+            <div><strong>${p.producto.nombre}</strong> x ${p.cantidad} = $${(p.cantidad * p.producto.precio).toFixed(2)}</div>
+            <div style="font-size:10px; margin-left:12px; color:#444">
+              Lote: ${p.lote || 'N/D'} - Caduca: ${p.fecha_caducidad || 'N/D'}
+            </div>
+          </div>
+        `;
+      }
+
+      // Promoción
+      if (p.promocion_id) {
+        const sub = (p.productos || [])
+          .map((sp: any) => `
+            <div style="font-size:10px; margin-left:12px;">
+              • ${sp.nombre} (x${(sp?.pivot?.cantidad ?? 1) * p.cantidad})
+            </div>
+          `)
+          .join('');
+        return `
+          <div style="margin-bottom:6px">
+            <div><strong>🎁 ${p.nombre_promocion || 'Promoción'}</strong> x ${p.cantidad} = $${(p.cantidad * Number(p.precio_promocion)).toFixed(2)}</div>
+            ${sub}
+          </div>
+        `;
+      }
+
+      return '';
+    }).join('');
+
+    const htmlTotales = `
+      <div class="section">
+        <div><strong>Subtotal productos:</strong> $${subtotalProductos.toFixed(2)}</div>
+        <div><strong>Subtotal promociones:</strong> $${subtotalPromos.toFixed(2)}</div>
+        <div style="color:green;"><strong>Ahorro por promociones:</strong> -$${ahorroPromos.toFixed(2)}</div>
       </div>
-    `).join('');
+    `;
 
     const resumenCambios = cambiosList.length > 0
-      ? cambiosList.map(c => `
+      ? cambiosList.map((c: any) => `
         <div>${c.producto} x ${c.cantidad} - Motivo: ${c.motivo}</div>
       `).join('')
       : '';
@@ -47,6 +101,7 @@ export default function Ticket() {
     return `
       <html>
         <head>
+          <meta charset="utf-8" />
           <style>
             body { font-family: monospace; font-size: 12px; padding: 20px; color: #000; }
             .center { text-align: center; }
@@ -85,8 +140,9 @@ export default function Ticket() {
           ` : ''}
 
           <div class="line"></div>
-
-          <div class="center bold">Total: $${parseFloat(total).toFixed(2)}</div>
+          ${htmlTotales}
+          <div class="line"></div>
+          <div class="center bold">Total: $${totalCalculado.toFixed(2)}</div>
           <div class="center">¡Gracias por tu compra!</div>
         </body>
       </html>
@@ -97,8 +153,8 @@ export default function Ticket() {
     try {
       const { uri } = await Print.printToFileAsync({ html: generarHTML() });
       await Sharing.shareAsync(uri);
-    } catch (error) {
-      Alert.alert('Error al generar ticket', error.message);
+    } catch (error: any) {
+      Alert.alert('Error al generar ticket', error?.message ?? 'Error desconocido');
     }
   };
 
@@ -115,34 +171,67 @@ export default function Ticket() {
           <Text>{fechaFormateada}</Text>
 
           <Text style={styles.label}><Ionicons name="chatbox" /> Observaciones:</Text>
-          <Text>{observaciones || 'Sin observaciones'}</Text>
+          <Text>{(observaciones as string) || 'Sin observaciones'}</Text>
         </View>
 
         <View style={styles.section}>
           <Text style={styles.label}>🧂 Productos</Text>
-          {productosList.map((p, i) => (
-            <View key={i} style={{ marginBottom: 8 }}>
-              <Text>{p.producto.nombre} x {p.cantidad} = ${(
-                p.cantidad * p.producto.precio
-              ).toFixed(2)}</Text>
-              <Text style={{ fontSize: 12, color: '#555', marginLeft: 12 }}>
-                Lote: {p.lote || 'N/D'} - Caduca: {p.fecha_caducidad || 'N/D'}
-              </Text>
-            </View>
-          ))}
+
+          {productosList.map((p: any, i: number) => {
+            // Producto normal
+            if (p.producto_id && p.producto) {
+              return (
+                <View key={`prod-${i}`} style={{ marginBottom: 8 }}>
+                  <Text>
+                    {p.producto.nombre} x {p.cantidad} = $
+                    {(p.cantidad * Number(p.producto.precio)).toFixed(2)}
+                  </Text>
+                  <Text style={{ fontSize: 12, color: '#555', marginLeft: 12 }}>
+                    Lote: {p.lote || 'N/D'} - Caduca: {p.fecha_caducidad || 'N/D'}
+                  </Text>
+                </View>
+              );
+            }
+
+            // Promoción
+            if (p.promocion_id) {
+              return (
+                <View key={`promo-${i}`} style={{ marginBottom: 10 }}>
+                  <Text style={{ fontWeight: 'bold', color: Colors.light.primario }}>
+                    🎁 {p.nombre_promocion || 'Promoción'} x {p.cantidad} = $
+                    {(p.cantidad * Number(p.precio_promocion)).toFixed(2)}
+                  </Text>
+                  {p.productos?.map((sp: any, j: number) => (
+                    <Text key={j} style={{ fontSize: 12, marginLeft: 12 }}>
+                      • {sp.nombre} (x{(sp?.pivot?.cantidad ?? 1) * p.cantidad})
+                    </Text>
+                  ))}
+                </View>
+              );
+            }
+
+            return null;
+          })}
         </View>
 
         {cambiosList.length > 0 && (
           <View style={styles.section}>
             <Text style={styles.label}>♻️ Productos Devueltos</Text>
-            {cambiosList.map((c, i) => (
+            {cambiosList.map((c: any, i: number) => (
               <Text key={i}>{c.producto} x {c.cantidad} - Motivo: {c.motivo}</Text>
             ))}
           </View>
         )}
 
+        <View style={styles.section}>
+          <Text style={styles.label}>Totales</Text>
+          <Text>Subtotal productos: ${subtotalProductos.toFixed(2)}</Text>
+          <Text>Subtotal promociones: ${subtotalPromos.toFixed(2)}</Text>
+          <Text style={{ color: 'green' }}>Ahorro por promociones: -${ahorroPromos.toFixed(2)}</Text>
+        </View>
+
         <View style={styles.totalContainer}>
-          <Text style={styles.totalText}>Total: ${parseFloat(total).toFixed(2)}</Text>
+          <Text style={styles.totalText}>Total: ${totalCalculado.toFixed(2)}</Text>
         </View>
 
         <TouchableOpacity style={styles.btn} onPress={crearYCompartirPDF}>
@@ -165,4 +254,3 @@ const styles = StyleSheet.create({
   btnText: { color: '#fff', fontWeight: 'bold' },
   error: { marginTop: 40, textAlign: 'center', color: 'red' },
 });
-

@@ -119,6 +119,7 @@ export default function PerfilScreen() {
         <View style={perfilStyle.inputWrapper}>
           <TextInput
             placeholder="Nueva contraseña"
+            placeholderTextColor="#000000"  // Cambia a cualquier color
             secureTextEntry={!showPassword}
             style={perfilStyle.input}
             value={password}
@@ -139,6 +140,7 @@ export default function PerfilScreen() {
         <View style={perfilStyle.inputWrapper}>
           <TextInput
             placeholder="Confirmar contraseña"
+            placeholderTextColor="#000000"  // Cambia a cualquier color
             secureTextEntry={!showConfirm}
             style={perfilStyle.input}
             value={confirmPassword}

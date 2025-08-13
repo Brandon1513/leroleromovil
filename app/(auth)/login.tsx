@@ -106,6 +106,7 @@ export default function LoginScreen() {
 
       <TextInput
         placeholder="Correo electrónico"
+        placeholderTextColor="#000000"  // Cambia a cualquier color
         style={loginStyle.input}
         autoCapitalize="none"
         keyboardType="email-address"
@@ -116,6 +117,7 @@ export default function LoginScreen() {
       <View style={loginStyle.inputWrapper}>
         <TextInput
           placeholder="Contraseña"
+          placeholderTextColor="#000000"  // Cambia a cualquier color
           secureTextEntry={!showPassword}
           style={loginStyle.input}
           value={password}
