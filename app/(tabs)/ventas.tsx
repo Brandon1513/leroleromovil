@@ -25,20 +25,30 @@ export default function Ventas() {
   const router = useRouter();
 
   const fetchClientes = async () => {
-    try {
-      const token = await AsyncStorage.getItem('authToken');
-      const res = await fetch(`${API_BASE_URL}/api/clientes`, {
-        headers: {
-          Accept: 'application/json',
-          Authorization: `Bearer ${token}`,
-        }
-      });
-      const data = await res.json();
-      setClientes(data);
-    } catch (error) {
-      console.error('Error al cargar clientes:', error.message);
-    }
-  };
+  try {
+    const token = await AsyncStorage.getItem('authToken');
+    const res = await fetch(`${API_BASE_URL}/api/clientes`, {
+      headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+    });
+    const raw = await res.json();
+
+    const data = (Array.isArray(raw) ? raw : []).map((c: any) => ({
+      id: c?.id,
+      nombre: c?.nombre ?? '',
+      telefono: c?.telefono ?? '',
+      latitud: c?.latitud ?? null,
+      longitud: c?.longitud ?? null,
+      nivel_precio_nombre:
+        c?.nivel_precio_nombre ?? c?.nivel_precio?.nombre ?? null,
+    }));
+
+    setClientes(data);
+  } catch (e: any) {
+    console.error('Error al cargar clientes:', e?.message ?? e);
+    setClientes([]);
+  }
+};
+
 
   useEffect(() => {
     fetchClientes();
@@ -146,8 +156,18 @@ export default function Ventas() {
             </View>
             <View style={styles.row}>
               <Ionicons name="pricetag-outline" size={16} color={Colors.light.primario} />
-              <Text style={styles.text}>{item.nivel_precio?.nombre}</Text>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text
+                  style={styles.text}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                >
+                  {item?.nivel_precio?.nombre ?? item?.nivel_precio_nombre ?? 'Sin nivel'}
+                </Text>
+              </View>
             </View>
+
+
           </TouchableOpacity>
         )}
       />

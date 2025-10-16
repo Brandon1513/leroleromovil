@@ -15,6 +15,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import Toast from 'react-native-toast-message';
 import { Colors } from '@/constants/Colors';
 import { API_BASE_URL } from '@/constants/Config';
@@ -38,14 +39,35 @@ export default function IniciarVenta() {
   const inputBusquedaRef = useRef<TextInput>(null);
   const router = useRouter();
 
+  // Limpia estado cada vez que se entra a esta pantalla
+  useFocusEffect(
+    useCallback(() => {
+      setCarrito([]);
+      setCambiosVenta([]);
+      setObservaciones('');
+      setBusqueda('');
+      return () => {};
+    }, [])
+  );
+
+  // ---- helpers de precio con fallback ----
+  const priceForClient = (p: any) =>
+    Number(p?.precio_cliente ?? p?.precio ?? 0);
+
+  const priceOfInventoryItemForClient = (invItem: any) =>
+    Number(invItem?.producto?.precio_cliente ?? invItem?.producto?.precio ?? 0);
+
   const fetchInventario = async () => {
     const token = await AsyncStorage.getItem('authToken');
     try {
+      // Enviamos cliente_id para que el backend, si puede, agregue `precio_cliente`
+      const clienteQS = clienteSeleccionado?.id ? `?cliente_id=${clienteSeleccionado.id}` : '';
+
       const [invRes, promoRes] = await Promise.all([
-        fetch(`${API_BASE_URL}/api/inventario`, {
+        fetch(`${API_BASE_URL}/api/inventario${clienteQS}`, {
           headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
         }),
-        fetch(`${API_BASE_URL}/api/promociones`, {
+        fetch(`${API_BASE_URL}/api/promociones${clienteQS}`, {
           headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
         }),
       ]);
@@ -73,12 +95,12 @@ export default function IniciarVenta() {
     fetchInventario();
   }, []);
 
-  // Busca precio de un producto suelto en inventario (para calcular ahorro de promo)
+  // Busca precio base o por nivel en el inventario local (para ahorro en promos)
   const getPrecioProducto = (prodId: number) => {
     const inv = productos.find(
       (i) => i.producto?.id === prodId || i.producto_id === prodId
     );
-    return Number(inv?.producto?.precio ?? 0);
+    return priceOfInventoryItemForClient(inv);
   };
 
   const agregarProducto = (producto: any) => {
@@ -95,11 +117,11 @@ export default function IniciarVenta() {
                 promocion_id: producto.id,
                 nombre_promocion: producto.nombre,
                 cantidad: 1,
-                precio_promocion: Number(producto.precio),
-                // Guardamos los productos de la promo con su precio para el ahorro
+                precio_promocion: Number(producto.precio), // precio de la promo
+                // Para ahorro: preferimos `precio_cliente` si viene del backend
                 productos: (producto.productos || []).map((sp: any) => ({
                   ...sp,
-                  precio: Number(sp?.precio ?? getPrecioProducto(sp.id) ?? 0),
+                  precio: Number(sp?.precio_cliente ?? sp?.precio ?? getPrecioProducto(sp.id) ?? 0),
                   pivot: sp.pivot,
                 })),
               },
@@ -114,7 +136,18 @@ export default function IniciarVenta() {
                 ? { ...p, cantidad: p.cantidad + 1 }
                 : p
             )
-          : [...prev, { ...producto, cantidad: 1 }];
+          : [
+              ...prev,
+              {
+                ...producto,
+                cantidad: 1,
+                // aseguramos que el item en carrito tenga el precio correcto para el cliente
+                producto: {
+                  ...producto.producto,
+                  precio: priceOfInventoryItemForClient(producto),
+                },
+              },
+            ];
       });
     }
   };
@@ -152,10 +185,10 @@ export default function IniciarVenta() {
 
   const totalProductosCount = carrito.reduce((acc, p) => acc + p.cantidad, 0);
 
-  // Subtotales y ahorro
+  // ---- Subtotales y ahorro usando precio por nivel si existe ----
   const subtotalProductos = carrito
     .filter((p) => p.producto_id && p.producto)
-    .reduce((acc, p) => acc + p.cantidad * Number(p.producto?.precio || 0), 0);
+    .reduce((acc, p) => acc + p.cantidad * Number(priceForClient(p.producto)), 0);
 
   const subtotalPromos = carrito
     .filter((p) => p.promocion_id)
@@ -181,7 +214,8 @@ export default function IniciarVenta() {
       .map((p) => ({
         producto_id: p.producto_id,
         cantidad: p.cantidad,
-        precio_unitario: p.producto.precio,
+        // precio UNITARIO que se guarda en la venta = precio de nivel si existe
+        precio_unitario: Number(priceForClient(p.producto)),
       }));
 
     const promocionesPayload = carrito
@@ -236,7 +270,9 @@ export default function IniciarVenta() {
         fecha: new Date().toISOString(),
       },
     });
+    // limpiar estado para que al volver no queden cosas arrastradas
     setCarrito([]);
+    setCambiosVenta([]);
     setObservaciones('');
     setModalVisible(false);
   };
@@ -297,10 +333,15 @@ export default function IniciarVenta() {
               {item.producto?.imagen_url && (
                 <Image source={{ uri: item.producto.imagen_url }} style={styles.imagen} resizeMode="contain" />
               )}
-              <Text style={styles.nombre}><Ionicons name="pricetag-outline" /> {item.producto?.nombre}</Text>
+              <Text style={styles.nombre}>
+                <Ionicons name="pricetag-outline" /> {item.producto?.nombre}
+              </Text>
               <Text><Ionicons name="cube-outline" /> Cantidad: {item.cantidad}</Text>
               <Text><Ionicons name="calendar-outline" /> Caduca: {item.fecha_caducidad || 'N/D'}</Text>
-              <Text><Ionicons name="cash-outline" /> Precio: ${Number(item.producto?.precio).toFixed(2)}</Text>
+              <Text>
+                <Ionicons name="cash-outline" /> Precio: $
+                {priceOfInventoryItemForClient(item).toFixed(2)}
+              </Text>
               <View style={styles.cantidadControl}>
                 <TouchableOpacity onPress={() => quitarProducto(item)}>
                   <Ionicons name="remove-circle-outline" size={24} color={Colors.light.primario} />
@@ -345,7 +386,7 @@ export default function IniciarVenta() {
                       <View key={`prod-${index}`} style={{ marginBottom: 6 }}>
                         <Text>
                           {p.producto.nombre} x {p.cantidad} = $
-                          {(p.cantidad * Number(p.producto.precio)).toFixed(2)}
+                          {(p.cantidad * Number(priceForClient(p.producto))).toFixed(2)}
                         </Text>
                         <Text style={{ fontSize: 12, color: '#666', marginLeft: 12 }}>
                           Lote: {p.lote || 'N/D'} · Caduca: {p.fecha_caducidad || 'N/D'}
