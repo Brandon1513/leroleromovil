@@ -17,7 +17,7 @@ import { useRouter } from "expo-router";
 import Toast from "react-native-toast-message";
 import { Ionicons } from "@expo/vector-icons";
 import { API_BASE_URL } from "@/constants/Config";
-import { loginStyle } from "./login.style";
+import { loginStyle } from "../../assets/Styles/login.style";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 
 export default function LoginScreen() {

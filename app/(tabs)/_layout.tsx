@@ -108,6 +108,12 @@ export default function TabsLayout() {
             href: null, // 👈 esto lo oculta de la barra de pestañas
           }}
         />
+        <Tabs.Screen
+          name="cobranza-cliente"
+          options={{
+            href: null, // 👈 esto lo oculta de la barra de pestañas
+          }}
+        />
        
       </Tabs>
       <Toast />
