@@ -1,4 +1,3 @@
-// IniciarVenta.tsx
 import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import {
   View, Text, TextInput, FlatList, TouchableOpacity, StyleSheet, Modal,
@@ -13,25 +12,54 @@ import { API_BASE_URL } from '@/constants/Config';
 import CambiosModal from '@/components/CambiosModal';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { getDraft, setDraft, clearDraft, type DraftSale } from '@/constants/draftSale';
-import * as Random from 'expo-random'; // idempotencia
+import * as Random from 'expo-random';
+
+// ⬇️ Opcional: selector de fecha nativo
+let DateTimePicker: any;
+try {
+  DateTimePicker = require('@react-native-community/datetimepicker').default;
+} catch { /* no-op */ }
 
 const money = (n: number) =>
   new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(Number(n || 0));
 
-/** Id único cliente → servidor (idempotencia) */
+// Helpers de fecha
+const toYMD = (d: Date) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+const addDays = (d: Date, n: number) => {
+  const c = new Date(d);
+  c.setDate(c.getDate() + n);
+  return c;
+};
+
 const newClientTxId = () => {
   const b = Random.getRandomBytes(8);
   return `${Date.now()}-${Array.from(b).map(n => n.toString(16).padStart(2,'0')).join('')}`;
 };
 
 export default function IniciarVenta() {
-  const { cliente, resume } = useLocalSearchParams();
+  // ahora aceptamos también cliente_id como param plano
+  const { cliente, cliente_id, resume } = useLocalSearchParams();
   const clienteSeleccionado = cliente ? JSON.parse(decodeURIComponent(cliente as string)) : null;
+
+  // 👇 nueva fuente de verdad para POST
+  const [clienteId, setClienteId] = useState<number | null>(
+    cliente_id ? Number(cliente_id) : (clienteSeleccionado?.id ?? null)
+  );
 
   const [productos, setProductos] = useState<any[]>([]);
   const [promociones, setPromociones] = useState<any[]>([]);
   const [busqueda, setBusqueda] = useState('');
   const [observaciones, setObservaciones] = useState('');
+  const [notaPago, setNotaPago] = useState('');     // referencia/nota
+  const [venceStr, setVenceStr] = useState('');     // YYYY-MM-DD
+
+  const [showPicker, setShowPicker] = useState(false); // selector nativo
+
   const [carrito, setCarrito] = useState<any[]>([]);
   const [modalVisible, setModalVisible] = useState(false);
   const [cambiosVenta, setCambiosVenta] = useState<any[]>([]);
@@ -44,10 +72,11 @@ export default function IniciarVenta() {
   const [pagoTransfer, setPagoTransfer] = useState<string>('');
   const [pagoTarjeta, setPagoTarjeta] = useState<string>('');
 
-  // idempotencia / anti-doble tap
+  // idempotencia
   const [isSaving, setIsSaving] = useState(false);
   const [clientTxId, setClientTxId] = useState<string>(newClientTxId());
 
+  const justClosedRef = useRef(false); // ⛳️ evita autosave justo después de cerrar
   const inputBusquedaRef = useRef<TextInput>(null);
   const router = useRouter();
 
@@ -59,7 +88,8 @@ export default function IniciarVenta() {
   const fetchInventario = async () => {
     const token = await AsyncStorage.getItem('authToken');
     try {
-      const clienteQS = clienteSeleccionado?.id ? `?cliente_id=${clienteSeleccionado.id}` : '';
+      const qsId = clienteId ?? clienteSeleccionado?.id;
+      const clienteQS = qsId ? `?cliente_id=${qsId}` : '';
       const [invRes, promoRes] = await Promise.all([
         fetch(`${API_BASE_URL}/api/inventario${clienteQS}`, {
           headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
@@ -93,12 +123,23 @@ export default function IniciarVenta() {
     return priceOfInventoryItemForClient(inv);
   };
 
-  // ======= Borrador: crear / reanudar =======
+  // ======= Borrador: crear / reanudar (robusto) =======
   useEffect(() => {
     (async () => {
+      // 1) Params → fija id
+      const idFromParams =
+        (cliente_id ? Number(cliente_id) : undefined) ??
+        (clienteSeleccionado?.id ?? undefined);
+
+      if (idFromParams && idFromParams > 0) {
+        setClienteId(idFromParams);
+      }
+
+      // 2) Reanudar
       if (resume === '1') {
         const draft = await getDraft();
         if (draft) {
+          if (draft?.cliente?.id) setClienteId(Number(draft.cliente.id));
           setCarrito(draft.carrito || []);
           setObservaciones(draft.observaciones || '');
           setCambiosVenta(draft.cambiosVenta || []);
@@ -109,32 +150,117 @@ export default function IniciarVenta() {
             setPagoTransfer(String(draft.pagos.transferencia ?? ''));
             setPagoTarjeta(String(draft.pagos.tarjeta ?? ''));
           }
-          setModalVisible(true); // abrir modal al reanudar
-          return;
+          setNotaPago(draft.nota_pago || '');
+          setVenceStr(draft.vence || '');
+          setModalVisible(true);
         }
+        return;
       }
-      // crear borrador inicial
-      const nuevo: DraftSale = {
-        cliente: clienteSeleccionado,
-        carrito: [],
-        observaciones: '',
-        cambiosVenta: [],
-        startedAt: new Date().toISOString(),
-        client_tx_id: clientTxId,
-        es_credito: esCredito,
-        pagos: { efectivo: '', transferencia: '', tarjeta: '' },
-        total: 0,
-      };
-      await setDraft(nuevo);
+
+      // 3) Crear borrador SOLO si hay cliente válido
+      if (idFromParams && idFromParams > 0) {
+        await setDraft({
+          cliente: { id: idFromParams, nombre: clienteSeleccionado?.nombre ?? '' },
+          carrito: [],
+          observaciones: '',
+          cambiosVenta: [],
+          startedAt: new Date().toISOString(),
+          client_tx_id: clientTxId,
+          es_credito: esCredito,
+          pagos: { efectivo: '', transferencia: '', tarjeta: '' },
+          nota_pago: '',
+          vence: '',
+          total: 0,
+        });
+      }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Guardar cada cambio significativo en el borrador
+  // filtros
+  const productosFiltrados = useMemo(
+    () => productos.filter((i) => (i.producto?.nombre || '').toLowerCase().includes(busqueda.toLowerCase())),
+    [productos, busqueda]
+  );
+  const promocionesFiltradas = useMemo(
+    () => promociones.filter((i) => (i.nombre || '').toLowerCase().includes(busqueda.toLowerCase())),
+    [promociones, busqueda]
+  );
+
+  const totalProductosCount = carrito.reduce((acc, p) => acc + (Number(p.cantidad) || 0), 0);
+
+  // totales
+  const subtotalProductos = carrito
+    .filter((p) => p.producto_id && p.producto)
+    .reduce((acc, p) => acc + Number(p.cantidad) * Number(priceForClient(p.producto)), 0);
+
+  const subtotalPromos = carrito
+    .filter((p) => p.promocion_id)
+    .reduce((acc, p) => acc + Number(p.cantidad) * Number(p.precio_promocion || 0), 0);
+
+  const ahorroPromos = carrito
+    .filter((p) => p.promocion_id)
+    .reduce((acc, p) => {
+      const precioNormalPack = (p.productos || []).reduce(
+        (s: number, sp: any) => s + Number(sp.precio || 0) * Number(sp?.pivot?.cantidad || 1),
+        0
+      );
+      return acc + Number(p.cantidad) * Math.max(precioNormalPack - Number(p.precio_promocion || 0), 0);
+    }, 0);
+
+  const totalVenta = subtotalProductos + subtotalPromos;
+
+  // ======= Pagos =======
+  const num = (s: string) => (s === '' ? 0 : Number(s));
+  const pagosSuma = num(pagoEfectivo) + num(pagoTransfer) + num(pagoTarjeta); // permite anticipo
+  const restante = Math.max(0, Number((totalVenta - pagosSuma).toFixed(2)));
+  const excedente = Math.max(0, Number((pagosSuma - totalVenta).toFixed(2)));
+
+  const esCreditoEfectivo = esCredito || restante > 0.5;
+
+  const pagosValidos = esCreditoEfectivo
+    ? pagosSuma <= totalVenta + 0.5
+    : Math.abs(totalVenta - pagosSuma) <= 0.5;
+
+  // Prefill de VENCE = hoy + 7 cuando es crédito (total o parcial)
+  useEffect(() => {
+    if (esCreditoEfectivo) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(venceStr || '')) {
+        setVenceStr(toYMD(addDays(new Date(), 7)));
+      }
+    } else {
+      if (restante <= 0.5) setVenceStr('');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [esCreditoEfectivo]);
+
+  // Autosave robusto (no guarda vacío y respeta justClosedRef)
   useEffect(() => {
     (async () => {
-      const draft: DraftSale = {
-        cliente: clienteSeleccionado,
+      if (justClosedRef.current) return;
+
+      if (!clienteId || clienteId <= 0) {
+        await clearDraft();
+        return;
+      }
+
+      const total = subtotalProductos + subtotalPromos;
+      const isEmpty =
+        carrito.length === 0 &&
+        total === 0 &&
+        !observaciones &&
+        cambiosVenta.length === 0 &&
+        !esCredito &&
+        !pagoEfectivo && !pagoTransfer && !pagoTarjeta &&
+        !notaPago && !venceStr;
+
+      if (isEmpty) {
+        await clearDraft();
+        return;
+      }
+
+      await setDraft({
+        cliente: { id: clienteId, nombre: clienteSeleccionado?.nombre ?? '' },
         carrito,
         observaciones,
         cambiosVenta,
@@ -142,11 +268,16 @@ export default function IniciarVenta() {
         client_tx_id: clientTxId,
         es_credito: esCredito,
         pagos: { efectivo: pagoEfectivo, transferencia: pagoTransfer, tarjeta: pagoTarjeta },
-        total: subtotalProductos + subtotalPromos,
-      };
-      await setDraft(draft);
+        nota_pago: notaPago,
+        vence: venceStr,
+        total,
+      });
     })();
-  }, [carrito, observaciones, cambiosVenta, esCredito, pagoEfectivo, pagoTransfer, pagoTarjeta, clientTxId]);
+  }, [
+    clienteId, carrito, observaciones, cambiosVenta, esCredito,
+    pagoEfectivo, pagoTransfer, pagoTarjeta, clientTxId, notaPago,
+    venceStr, subtotalProductos, subtotalPromos
+  ]);
 
   // === Carrito: + / - / set cantidad directa ===
   const agregarProducto = (producto: any) => {
@@ -262,52 +393,30 @@ export default function IniciarVenta() {
     }
   };
 
-  // filtros
-  const productosFiltrados = useMemo(
-    () => productos.filter((i) => (i.producto?.nombre || '').toLowerCase().includes(busqueda.toLowerCase())),
-    [productos, busqueda]
-  );
-  const promocionesFiltradas = useMemo(
-    () => promociones.filter((i) => (i.nombre || '').toLowerCase().includes(busqueda.toLowerCase())),
-    [promociones, busqueda]
-  );
-
-  const totalProductosCount = carrito.reduce((acc, p) => acc + (Number(p.cantidad) || 0), 0);
-
-  // totales
-  const subtotalProductos = carrito
-    .filter((p) => p.producto_id && p.producto)
-    .reduce((acc, p) => acc + Number(p.cantidad) * Number(priceForClient(p.producto)), 0);
-
-  const subtotalPromos = carrito
-    .filter((p) => p.promocion_id)
-    .reduce((acc, p) => acc + Number(p.cantidad) * Number(p.precio_promocion || 0), 0);
-
-  const ahorroPromos = carrito
-    .filter((p) => p.promocion_id)
-    .reduce((acc, p) => {
-      const precioNormalPack = (p.productos || []).reduce(
-        (s: number, sp: any) => s + Number(sp.precio || 0) * Number(sp?.pivot?.cantidad || 1),
-        0
-      );
-      return acc + Number(p.cantidad) * Math.max(precioNormalPack - Number(p.precio_promocion || 0), 0);
-    }, 0);
-
-  const totalVenta = subtotalProductos + subtotalPromos;
-
-  // ======= Pagos =======
-  const num = (s: string) => (s === '' ? 0 : Number(s));
-  const pagosSuma = esCredito ? 0 : num(pagoEfectivo) + num(pagoTransfer) + num(pagoTarjeta);
-  const restante = Math.max(0, Number((totalVenta - pagosSuma).toFixed(2)));
-  const excedente = Math.max(0, Number((pagosSuma - totalVenta).toFixed(2)));
-  const pagosValidos = esCredito ? true : excedente === 0;
+  // Ayudita para “metodo_pago” para el Ticket
+  const metodoPagoForTicket = () => {
+    const arr = [
+      { k: 'efectivo', v: num(pagoEfectivo) },
+      { k: 'transferencia', v: num(pagoTransfer) },
+      { k: 'tarjeta', v: num(pagoTarjeta) },
+    ].filter(x => x.v > 0);
+    if (esCreditoEfectivo && arr.length === 0) return 'crédito';
+    if (arr.length === 0) return 'efectivo';
+    if (arr.length === 1) return arr[0].k;
+    return 'mixto';
+  };
 
   // ======= Guardar (POST) con idempotencia =======
   const confirmarVenta = async () => {
-    if (isSaving) return; // evita doble tap
+    if (isSaving) return;
     setIsSaving(true);
 
     try {
+      if (!clienteId || clienteId <= 0) {
+        Toast.show({ type: 'error', text1: 'Venta sin cliente', text2: 'No se encontró el cliente de la venta.' });
+        return null;
+      }
+
       const token = await AsyncStorage.getItem('authToken');
 
       const productosPayload = carrito
@@ -327,13 +436,26 @@ export default function IniciarVenta() {
           cantidad: Number(p.cantidad),
         }));
 
-      const pagosPayload = esCredito
-        ? []
-        : [
-            { metodo: 'efectivo', monto: Number(pagoEfectivo || 0) },
-            { metodo: 'transferencia', monto: Number(pagoTransfer || 0) },
-            { metodo: 'tarjeta',      monto: Number(pagoTarjeta || 0) },
-          ].filter((x) => x.monto > 0);
+      const pagosPayload = [
+        { metodo: 'efectivo',      monto: Number(pagoEfectivo || 0) },
+        { metodo: 'transferencia', monto: Number(pagoTransfer || 0) },
+        { metodo: 'tarjeta',       monto: Number(pagoTarjeta || 0) },
+      ].filter((x) => x.monto > 0);
+
+      const body: any = {
+        cliente_id: clienteId,               // 👈 usar state confiable
+        observaciones,
+        productos: productosPayload,
+        promociones: promocionesPayload,
+        es_credito: esCreditoEfectivo,
+        pagos: pagosPayload,
+        client_tx_id: clientTxId,
+      };
+      if (/^\d{4}-\d{2}-\d{2}$/.test(venceStr)) body.fecha_vencimiento = venceStr;
+      if (notaPago.trim() !== '') body.nota_pago = notaPago.trim();
+
+      // Depuración opcional
+      // console.log('[POST venta] clienteId=', clienteId, 'carrito.len=', carrito.length);
 
       const response = await fetch(`${API_BASE_URL}/api/venta`, {
         method: 'POST',
@@ -342,78 +464,83 @@ export default function IniciarVenta() {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({
-          cliente_id: clienteSeleccionado?.id,
-          observaciones,
-          productos: productosPayload,
-          promociones: promocionesPayload,
-          es_credito: esCredito,
-          pagos: pagosPayload,
-          saldo_pendiente: esCredito ? Number(totalVenta) : Number(restante),
-          total: Number(totalVenta),
-
-          // idempotencia
-          client_tx_id: clientTxId,
-        }),
+        body: JSON.stringify(body),
       });
 
       const data = await response.json();
 
       if (!response.ok) {
         Toast.show({ type: 'error', text1: 'Error al guardar venta', text2: data?.message || 'Ocurrió un error' });
-        return;
+        return null;
       }
 
-      // Mostrar advertencia de crédito si llegó
       if (data?.warning) {
         Toast.show({ type: 'info', text1: 'Aviso de crédito', text2: String(data.warning) });
       }
 
-      // ✅ OK
-      await clearDraft();
-      setClientTxId(newClientTxId()); // preparar siguiente venta
-      Toast.show({ type: 'success', text1: '✅ Venta registrada', text2: `Folio #${data?.venta_id}` });
-      fetchInventario();
+      return {
+        venta_id: data?.venta_id,
+        total: Number(data?.total ?? totalVenta),
+        pagado: Number(data?.pagado ?? (totalVenta - restante)),
+        saldo_pendiente: Number(data?.saldo_pendiente ?? Math.max(0, totalVenta - (totalVenta - restante))),
+        estado: String(data?.estado ?? (esCreditoEfectivo ? 'credito' : 'pagada')),
+      };
     } catch (e: any) {
       Toast.show({ type: 'error', text1: 'Fallo de red', text2: String(e?.message || e) });
+      return null;
     } finally {
       setIsSaving(false);
     }
   };
 
-  const finalizarVenta = () => {
+  const finalizarVenta = async () => {
+    const result = await confirmarVenta();
+    if (!result) return;
+
+    // Evitar re-creación del borrador durante el reseteo de estados
+    justClosedRef.current = true;
+    await clearDraft();
+
+    setClientTxId(newClientTxId());
+    fetchInventario();
+
     router.push({
       pathname: '/ticket',
       params: {
         cliente: JSON.stringify(clienteSeleccionado),
         productos: JSON.stringify(carrito),
         cambios: JSON.stringify(cambiosVenta),
-        total: totalVenta.toFixed(2),
+        total: String(result.total.toFixed(2)),
         observaciones,
         fecha: new Date().toISOString(),
-        es_credito: String(esCredito),
-        pagos: JSON.stringify(
-          esCredito
-            ? []
-            : [
-                { metodo: 'efectivo',      monto: num(pagoEfectivo) },
-                { metodo: 'transferencia', monto: num(pagoTransfer) },
-                { metodo: 'tarjeta',       monto: num(pagoTarjeta) },
-              ].filter((x) => x.monto > 0)
-        ),
-        saldo_pendiente: String(esCredito ? totalVenta : restante),
+        metodo_pago: metodoPagoForTicket(),
+        es_credito: String(esCreditoEfectivo),
+        estado: result.estado,
+        total_pagado: String(result.pagado ?? 0),
+        saldo_pendiente: String(result.saldo_pendiente ?? 0),
+        fecha_vencimiento: venceStr || '',
+        nota_pago: notaPago || '',
+        cliente_id: String(clienteId ?? ''), // opcional, por coherencia
       },
     });
+
+    // limpiar UI
     setCarrito([]);
     setCambiosVenta([]);
     setObservaciones('');
+    setNotaPago('');
+    setVenceStr('');
     setModalVisible(false);
-    setClientTxId(newClientTxId()); // por si el usuario vuelve a esta vista de inmediato
+
+    // liberar el flag después de un tick
+    setTimeout(() => { justClosedRef.current = false; }, 500);
   };
 
   return (
     <SafeAreaView style={styles.container}>
-      <Text style={styles.header}>Venta para: {clienteSeleccionado?.nombre}</Text>
+      <Text style={styles.header}>
+        Venta para: {clienteSeleccionado?.nombre || (clienteId ? `#${clienteId}` : '')}
+      </Text>
 
       <View style={styles.searchWrap}>
         <Ionicons name="search" size={18} color="#6B7280" />
@@ -471,7 +598,7 @@ export default function IniciarVenta() {
           if (item.isPromo) {
             return (
               <View style={[styles.card, { borderLeftColor: Colors.light.primario, borderLeftWidth: 4 }]}>
-                <Text style={[styles.nombre, { color: 'purple' }]}>🔥 Promoción: {item.nombre}</Text>
+                <Text style={[styles.nombre, { color: 'purple' }]} numberOfLines={2}>🔥 Promoción: {item.nombre}</Text>
                 {!!item.descripcion && <Text style={styles.small}>📋 {item.descripcion}</Text>}
                 <Text style={styles.small}>💰 Precio Promo: {money(item.precio)}</Text>
                 <Text style={styles.small}>🕒 {item.fecha_inicio} a {item.fecha_fin}</Text>
@@ -489,7 +616,9 @@ export default function IniciarVenta() {
               {item.producto?.imagen_url && (
                 <Image source={{ uri: item.producto.imagen_url }} style={styles.imagen} resizeMode="contain" />
               )}
-              <Text style={styles.nombre}><Ionicons name="pricetag-outline" /> {item.producto?.nombre}</Text>
+              <Text style={styles.nombre} numberOfLines={2}>
+                <Ionicons name="pricetag-outline" /> {item.producto?.nombre}
+              </Text>
               <Text style={styles.small}><Ionicons name="cube-outline" /> Cantidad: {item.cantidad}</Text>
               <Text style={styles.small}><Ionicons name="calendar-outline" /> Caduca: {item.fecha_caducidad || 'N/D'}</Text>
               <Text style={styles.small}><Ionicons name="cash-outline" /> Precio: {money(priceOfInventoryItemForClient(item))}</Text>
@@ -500,13 +629,13 @@ export default function IniciarVenta() {
         contentContainerStyle={{ paddingBottom: 120 }}
       />
 
-      {/* Abrir carrito y guardar borrador inmediato */}
+      {/* Abrir carrito y guardar borrador */}
       <TouchableOpacity
         style={styles.carritoBtn}
         onPress={async () => {
           setModalVisible(true);
           await setDraft({
-            cliente: clienteSeleccionado,
+            cliente: clienteId ? { id: clienteId, nombre: clienteSeleccionado?.nombre ?? '' } : clienteSeleccionado,
             carrito,
             observaciones,
             cambiosVenta,
@@ -514,6 +643,8 @@ export default function IniciarVenta() {
             client_tx_id: clientTxId,
             es_credito: esCredito,
             pagos: { efectivo: pagoEfectivo, transferencia: pagoTransfer, tarjeta: pagoTarjeta },
+            nota_pago: notaPago,
+            vence: venceStr,
             total: subtotalProductos + subtotalPromos,
           });
         }}
@@ -537,7 +668,7 @@ export default function IniciarVenta() {
                     if (p.producto_id && p.producto) {
                       return (
                         <View key={`prod-${index}`} style={{ marginBottom: 6 }}>
-                          <Text>
+                          <Text numberOfLines={2}>
                             {p.producto.nombre} x {p.cantidad} = {money(p.cantidad * Number(priceForClient(p.producto)))}
                           </Text>
                           <Text style={styles.metaSmall}>
@@ -549,7 +680,7 @@ export default function IniciarVenta() {
                     if (p.promocion_id) {
                       return (
                         <View key={`promo-${index}`} style={{ marginBottom: 6 }}>
-                          <Text style={{ fontWeight: 'bold', color: Colors.light.primario }}>
+                          <Text style={{ fontWeight: 'bold', color: Colors.light.primario }} numberOfLines={2}>
                             🎁 {p.nombre_promocion || 'Promoción'} x {p.cantidad} = {money(p.cantidad * Number(p.precio_promocion))}
                           </Text>
                           {p.productos?.map((sp: any, j: number) => (
@@ -586,94 +717,87 @@ export default function IniciarVenta() {
                 <View style={styles.payHeader}>
                   <Text style={styles.payTitle}>Método(s) de pago</Text>
                   <TouchableOpacity
-                    onPress={() => {
-                      const next = !esCredito;
-                      setEsCredito(next);
-                      if (next) { setPagoEfectivo(''); setPagoTransfer(''); setPagoTarjeta(''); }
-                    }}
-                    style={[styles.creditChip, esCredito && { backgroundColor: '#FEE2E2', borderColor: '#FECACA' }]}
+                    onPress={() => { setEsCredito(!esCredito); }}
+                    style={[styles.creditChip, (esCreditoEfectivo && { backgroundColor: '#FEE2E2', borderColor: '#FECACA' }) as any]}
                   >
-                    <Ionicons name="time-outline" size={14} color={esCredito ? '#991B1B' : '#374151'} />
-                    <Text style={[styles.creditChipText, esCredito && { color: '#991B1B' }]}>
-                      {esCredito ? 'Venta a crédito' : 'Contado'}
+                    <Ionicons name="time-outline" size={14} color={esCreditoEfectivo ? '#991B1B' : '#374151'} />
+                    <Text style={[styles.creditChipText, esCreditoEfectivo && { color: '#991B1B' }]}>
+                      {esCreditoEfectivo ? 'Venta a crédito' : 'Contado'}
                     </Text>
                   </TouchableOpacity>
                 </View>
 
-                {!esCredito && (
-                  <>
-                    <View style={styles.payRow}>
-                      <Text style={styles.payLabel}>Efectivo</Text>
-                      <TextInput
-                        style={styles.payInput}
-                        placeholder="$0.00"
-                        keyboardType="decimal-pad"
-                        value={pagoEfectivo}
-                        onChangeText={setPagoEfectivo}
-                      />
-                    </View>
-                    <View style={styles.payRow}>
-                      <Text style={styles.payLabel}>Transferencia</Text>
-                      <TextInput
-                        style={styles.payInput}
-                        placeholder="$0.00"
-                        keyboardType="decimal-pad"
-                        value={pagoTransfer}
-                        onChangeText={setPagoTransfer}
-                      />
-                    </View>
-                    <View style={styles.payRow}>
-                      <Text style={styles.payLabel}>Tarjeta</Text>
-                      <TextInput
-                        style={styles.payInput}
-                        placeholder="$0.00"
-                        keyboardType="decimal-pad"
-                        value={pagoTarjeta}
-                        onChangeText={setPagoTarjeta}
-                      />
-                    </View>
+                <View className="payRow" style={styles.payRow}>
+                  <Text style={styles.payLabel}>Efectivo</Text>
+                  <TextInput style={styles.payInput} placeholder="$0.00" keyboardType="decimal-pad" value={pagoEfectivo} onChangeText={setPagoEfectivo} />
+                </View>
+                <View style={styles.payRow}>
+                  <Text style={styles.payLabel}>Transferencia</Text>
+                  <TextInput style={styles.payInput} placeholder="$0.00" keyboardType="decimal-pad" value={pagoTransfer} onChangeText={setPagoTransfer} />
+                </View>
+                <View style={styles.payRow}>
+                  <Text style={styles.payLabel}>Tarjeta</Text>
+                  <TextInput style={styles.payInput} placeholder="$0.00" keyboardType="decimal-pad" value={pagoTarjeta} onChangeText={setPagoTarjeta} />
+                </View>
 
-                    <View style={styles.paySummary}>
-                      <Text style={styles.paySumText}>Pagado: {money(pagosSuma)}</Text>
-                      {restante > 0 ? (
-                        <Text style={[styles.paySumText, { color: '#B45309' }]}>Restante: {money(restante)}</Text>
-                      ) : (
-                        <Text style={[styles.paySumText, { color: '#065F46' }]}>Listo para cerrar</Text>
-                      )}
-                      {excedente > 0 && (
-                        <Text style={[styles.paySumText, { color: '#991B1B' }]}>Excedente: {money(excedente)}</Text>
-                      )}
-                    </View>
-                  </>
+                {/* referencia y vencimiento */}
+                <View style={styles.payRow}>
+                  <Text style={styles.payLabel}>Referencia</Text>
+                  <TextInput style={styles.payInput} placeholder="(opcional)" value={notaPago} onChangeText={setNotaPago} />
+                </View>
+
+                <View style={styles.payRow}>
+                  <Text style={styles.payLabel}>Vence</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <TextInput style={[styles.payInput, { width: 130 }]} placeholder="YYYY-MM-DD" value={venceStr} onChangeText={setVenceStr} />
+                    {DateTimePicker && (
+                      <TouchableOpacity onPress={() => setShowPicker(true)}>
+                        <Ionicons name="calendar-outline" size={22} color={Colors.light.primario} />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                </View>
+
+                {showPicker && DateTimePicker && (
+                  <DateTimePicker
+                    value={/^\d{4}-\d{2}-\d{2}$/.test(venceStr) ? new Date(venceStr) : addDays(new Date(), 7)}
+                    mode="date"
+                    display={Platform.OS === 'ios' ? 'inline' : 'default'}
+                    onChange={(_, date) => { setShowPicker(Platform.OS === 'ios'); if (date) setVenceStr(toYMD(date)); }}
+                  />
                 )}
 
-                {esCredito && (
-                  <Text style={{ color: '#6B7280', marginTop: 6 }}>
-                    La venta se registrará a crédito. Saldo pendiente: {money(totalVenta)}
-                  </Text>
-                )}
+                <View style={styles.paySummary}>
+                  <Text style={styles.paySumText}>Pagado: {money(pagosSuma)}</Text>
+                  {excedente > 0 && (<Text style={[styles.paySumText, { color: '#991B1B' }]}>Excedente: {money(excedente)}</Text>)}
+                  {!(esCreditoEfectivo) ? (
+                    restante > 0
+                      ? <Text style={[styles.paySumText, { color: '#B45309' }]}>Restante: {money(restante)}</Text>
+                      : <Text style={[styles.paySumText, { color: '#065F46' }]}>Listo para cerrar</Text>
+                  ) : (
+                    <Text style={styles.paySumText}>Saldo: {money(Math.max(0, totalVenta - pagosSuma))}</Text>
+                  )}
+                </View>
               </View>
             </ScrollView>
 
             <TouchableOpacity
-              style={[styles.confirmarBtn, (!pagosValidos || carrito.length === 0 || isSaving) && { opacity: 0.5 }]}
+              style={[styles.confirmarBtn, (carrito.length === 0 || !pagosValidos || isSaving) && { opacity: 0.5 }]}
               onPress={() => {
                 if (!pagosValidos) {
-                  Alert.alert('Revisa los pagos', 'La suma de los pagos no puede exceder el total.');
+                  Alert.alert(
+                    'Revisa los pagos',
+                    esCreditoEfectivo
+                      ? 'En crédito, el anticipo no puede exceder el total.'
+                      : 'En contado, la suma debe cubrir el total.'
+                  );
                   return;
                 }
                 Alert.alert(
                   '¿Recibiste producto en cambio?',
                   'El cliente devolvió productos por caducidad o no vendidos.',
                   [
-                    {
-                      text: 'NO',
-                      onPress: async () => {
-                        await confirmarVenta();
-                        finalizarVenta();
-                      },
-                      style: 'cancel',
-                    },
+                    { text: 'NO', onPress: async () => { await finalizarVenta(); }, style: 'cancel' },
                     {
                       text: 'SÍ',
                       onPress: () => {
@@ -721,8 +845,7 @@ export default function IniciarVenta() {
         cambiosVenta={cambiosVenta}
         setCambiosVenta={setCambiosVenta}
         onConfirmar={async () => {
-          await confirmarVenta();
-          finalizarVenta();
+          await finalizarVenta();
           setModalCambiosVisible(false);
         }}
         onClose={() => setModalCambiosVisible(false)}
@@ -788,9 +911,9 @@ const styles = StyleSheet.create({
   payRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10 },
   payLabel: { color: '#111827' },
   payInput: {
-    width: 120, height: 40, backgroundColor: '#fff', borderWidth: 1, borderColor: '#E5E7EB',
+    width: 160, height: 40, backgroundColor: '#fff', borderWidth: 1, borderColor: '#E5E7EB',
     borderRadius: 8, paddingHorizontal: 10, textAlign: 'right', color: '#111827'
   },
-  paySummary: { marginTop: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  paySummary: { marginTop: 10, gap: 4 },
   paySumText: { fontWeight: '700' },
 });

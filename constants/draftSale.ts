@@ -13,6 +13,9 @@ export type DraftSale = {
   es_credito?: boolean;
   pagos?: { efectivo?: string; transferencia?: string; tarjeta?: string };
   total?: number;
+  // NUEVO:
+  completed?: boolean;           // venta ya registrada en el servidor
+  venta_id?: number | null;      // id de la venta en backend (opcional)
 };
 
 export async function getDraft(): Promise<DraftSale | null> {

@@ -36,6 +36,23 @@ export default function Ventas() {
   const [checkingId, setCheckingId] = useState<number | null>(null);
   const router = useRouter();
 
+  // Helpers de navegación segura → IniciarVenta
+  const encodeCliente = (c: Partial<Cliente> | null | undefined) => {
+    if (!c || typeof c !== 'object') return '';
+    const lite = { id: (c as any).id, nombre: (c as any).nombre };
+    if (lite.id == null) return '';
+    try { return encodeURIComponent(JSON.stringify(lite)); } catch { return ''; }
+  };
+
+  const goIniciar = (c: Cliente, extraParams: Record<string, string> = {}) => {
+    const encoded = encodeCliente(c);
+    if (!encoded) return; // evita /IniciarVenta?cliente=null
+    router.push({
+      pathname: '/IniciarVenta',
+      params: { cliente: encoded, cliente_id: String(c.id), ...extraParams }, // 👈 aseguramos cliente_id
+    });
+  };
+
   const fetchClientes = async () => {
     try {
       const token = await AsyncStorage.getItem('authToken');
@@ -66,28 +83,45 @@ export default function Ventas() {
 
   useEffect(() => { fetchClientes(); }, []);
 
-  // 🔔 Avisar venta pendiente al entrar a la pantalla
+  // 🔔 Avisar venta pendiente al entrar a la pantalla (solo si es válida)
   useFocusEffect(
     useCallback(() => {
       (async () => {
         const draft = await getDraft();
-        if (draft) {
-          Alert.alert(
-            'Venta pendiente',
-            `Tienes una venta sin cerrar para "${draft.cliente?.nombre ?? 'cliente'}".`,
-            [
-              {
-                text: 'Reanudar',
-                onPress: () => {
-                  const encoded = encodeURIComponent(JSON.stringify(draft.cliente));
-                  router.push(`/IniciarVenta?cliente=${encoded}&resume=1`);
-                },
-              },
-              { text: 'Descartar', style: 'destructive', onPress: clearDraft },
-              { text: 'Cerrar', style: 'cancel' },
-            ],
-          );
+        if (!draft) return;
+
+        const hasClient = !!draft?.cliente?.id;
+        const hasItems  = Array.isArray(draft?.carrito) && draft.carrito.length > 0;
+        const hasTotal  = Number(draft?.total ?? 0) > 0;
+
+        if (!hasClient || (!hasItems && !hasTotal)) {
+          await clearDraft(); // limpia restos vacíos
+          return;
         }
+
+        Alert.alert(
+          'Venta pendiente',
+          `Tienes una venta sin cerrar para "${draft?.cliente?.nombre ?? 'cliente'}".`,
+          [
+            {
+              text: 'Reanudar',
+              onPress: () => {
+                const enc = encodeCliente(draft?.cliente as any);
+                if (!enc) return;
+                router.push({
+                  pathname: '/IniciarVenta',
+                  params: {
+                    cliente: enc,
+                    cliente_id: String(draft.cliente.id),
+                    resume: '1',
+                  },
+                });
+              },
+            },
+            { text: 'Descartar', style: 'destructive', onPress: clearDraft },
+            { text: 'Cerrar', style: 'cancel' },
+          ],
+        );
       })();
     }, [])
   );
@@ -130,9 +164,8 @@ export default function Ventas() {
       {
         text: 'Aceptar',
         onPress: () => {
-          const encoded = encodeURIComponent(JSON.stringify(cliente));
           const rid = Date.now().toString();
-          router.push(`/IniciarVenta?cliente=${encoded}&rid=${rid}`);
+          goIniciar(cliente, { rid });
         },
       },
     ]);
@@ -142,15 +175,12 @@ export default function Ventas() {
     // 0) ⛔ si hay borrador, bloquear y ofrecer reanudar/descartar
     if (await hasDraft()) {
       const draft = await getDraft();
+      const enc = encodeCliente(draft?.cliente as any);
       Alert.alert(
         'Venta pendiente',
         `Tienes una venta sin cerrar para "${draft?.cliente?.nombre ?? 'cliente'}".`,
         [
-          { text: 'Reanudar', onPress: () => {
-              const encoded = encodeURIComponent(JSON.stringify(draft?.cliente));
-              router.push(`/IniciarVenta?cliente=${encoded}&resume=1`);
-            }
-          },
+          { text: 'Reanudar', onPress: () => { if (enc) router.push({ pathname: '/IniciarVenta', params: { cliente: enc, cliente_id: String(draft?.cliente?.id ?? ''), resume: '1' } }); } },
           { text: 'Descartar', style: 'destructive', onPress: clearDraft },
           { text: 'Cancelar', style: 'cancel' },
         ]
@@ -168,8 +198,9 @@ export default function Ventas() {
           {
             text: 'Ir a Cobranza',
             onPress: () => {
-              const encoded = encodeURIComponent(JSON.stringify(cliente));
-              router.push(`/cobranza-cliente?cliente=${encoded}`);
+              const enc = encodeCliente(cliente);
+              if (!enc) return;
+              router.push({ pathname: '/cobranza-cliente', params: { cliente: enc } });
             },
           },
         ]

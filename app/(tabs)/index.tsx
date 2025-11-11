@@ -13,7 +13,7 @@ import { homeStyle } from '@/assets/Styles/Home.style';
 import { Ionicons, Feather } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { getDraft, clearDraft } from '@/constants/draftSale'; // <-- ajusta a tu ruta
+import { getDraft, clearDraft } from '@/constants/draftSale';
 import { useFocusEffect } from '@react-navigation/native';
 
 type Option = { id: string; label: string; icon: JSX.Element; route: string };
@@ -25,6 +25,8 @@ const baseOptions: Option[] = [
   { id: '4', label: 'Perfil',     icon: <Ionicons name="person-outline" size={32} color={Colors.light.primario} />, route: '/(tabs)/perfil' },
   { id: '5', label: 'Rutas',      icon: <Ionicons name="map-outline" size={32} color={Colors.light.primario} />, route: '/(tabs)/ruta' },
 ];
+
+const MAX_DRAFT_AGE_MS = 2 * 60 * 60 * 1000; // 2h
 
 const money = (n: number) =>
   new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(Number(n || 0));
@@ -41,27 +43,71 @@ const timeAgo = (iso?: string) => {
   return `hace ${days} d`;
 };
 
+// Decide si se debe mostrar el banner
+const shouldShowDraft = (d: any): boolean => {
+  if (!d) return false;
+  if (d.completed) return false; // el backend ya la registró
+  const carritoLen = Array.isArray(d.carrito) ? d.carrito.length : 0;
+  if (carritoLen === 0) return false;
+
+  // total > 0 (si no vino, acepta 0)
+  const total = Number(d.total || 0);
+  if (total <= 0) return false;
+
+  // reciente
+  const started = d.startedAt ? new Date(d.startedAt).getTime() : 0;
+  if (!started || (Date.now() - started) > MAX_DRAFT_AGE_MS) return false;
+
+  return true;
+};
+
 export default function HomeScreen() {
   const router = useRouter();
   const [options] = useState<Option[]>(baseOptions);
-  const [hasDraft, setHasDraft] = useState(false);
+
+  const [hasDraft, setHasDraft]   = useState(false);
   const [draftClient, setDraftClient] = useState<string>('');
-  const [draftTotal, setDraftTotal] = useState<number>(0);
-  const [draftWhen, setDraftWhen] = useState<string>('');
+  const [draftTotal, setDraftTotal]   = useState<number>(0);
+  const [draftWhen, setDraftWhen]     = useState<string>('');
 
   const loadDraft = useCallback(async () => {
-    const d = await getDraft();
-    setHasDraft(!!d);
-    setDraftClient(d?.cliente?.nombre || '');
-    setDraftTotal(Number(d?.total || 0));
-    setDraftWhen(d?.startedAt || '');
+    try {
+      const d = await getDraft();
+
+      // Si el draft está marcado como completado, lo limpiamos silenciosamente
+      if (d?.completed) {
+        await clearDraft();
+        setHasDraft(false);
+        setDraftClient('');
+        setDraftTotal(0);
+        setDraftWhen('');
+        return;
+      }
+
+      const show = shouldShowDraft(d);
+      setHasDraft(show);
+      if (show) {
+        setDraftClient(d?.cliente?.nombre || '');
+        setDraftTotal(Number(d?.total || 0));
+        setDraftWhen(d?.startedAt || '');
+      } else {
+        setDraftClient('');
+        setDraftTotal(0);
+        setDraftWhen('');
+      }
+    } catch {
+      setHasDraft(false);
+      setDraftClient('');
+      setDraftTotal(0);
+      setDraftWhen('');
+    }
   }, []);
 
   useEffect(() => { loadDraft(); }, [loadDraft]);
   useFocusEffect(useCallback(() => { loadDraft(); }, [loadDraft]));
 
   const resumeSale = () => {
-    router.push('/IniciarVenta?resume=1'); // el cliente viene del borrador
+    router.push('/IniciarVenta?resume=1'); // reanuda con el borrador existente
   };
 
   const discardSale = async () => {
@@ -114,7 +160,7 @@ export default function HomeScreen() {
     <SafeAreaView style={homeStyle.container}>
       <Text style={homeStyle.title}>Bienvenido 👋</Text>
 
-      {/* Banner de venta en curso */}
+      {/* Banner de venta en curso (solo si aplica) */}
       {hasDraft && (
         <View style={styles.banner}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -132,16 +178,10 @@ export default function HomeScreen() {
           </View>
 
           <View style={{ flexDirection: 'row', gap: 10 }}>
-            <TouchableOpacity
-              onPress={resumeSale}
-              style={styles.chipPrimary}
-            >
+            <TouchableOpacity onPress={resumeSale} style={styles.chipPrimary}>
               <Text style={styles.chipPrimaryText}>Reanudar</Text>
             </TouchableOpacity>
-            <TouchableOpacity
-              onPress={discardSale}
-              style={styles.chipDanger}
-            >
+            <TouchableOpacity onPress={discardSale} style={styles.chipDanger}>
               <Text style={styles.chipDangerText}>Descartar</Text>
             </TouchableOpacity>
           </View>
@@ -230,12 +270,10 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.light.primario,
     alignItems: 'center',
     justifyContent: 'center',
-    // sombra iOS
     shadowColor: '#000',
     shadowOpacity: 0.2,
     shadowRadius: 4,
     shadowOffset: { width: 0, height: 2 },
-    // sombra Android
     elevation: 6,
   },
   fabDot: {
@@ -245,7 +283,7 @@ const styles = StyleSheet.create({
     width: 10,
     height: 10,
     borderRadius: 5,
-    backgroundColor: '#F59E0B', // indicador de borrador
+    backgroundColor: '#F59E0B',
     borderWidth: 1.5,
     borderColor: '#fff',
   },
