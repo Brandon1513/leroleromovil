@@ -1,4 +1,4 @@
-// app/ticket.tsx
+// app/ticket.tsx - CON RESUMEN POR CATEGORÍAS
 import React, { useMemo, useState, useEffect } from 'react';
 import {
   View,
@@ -19,7 +19,7 @@ import { Colors } from '@/constants/Colors';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 const LOGO_LOCAL = require('../../assets/images/lerolero-logo.png');
-const REMOTE_LOGO_URL = 'https://lerolerob.domcloud.dev/images/logo.png'; // ← tu logo en el back (HTTPS)
+const REMOTE_LOGO_URL = 'https://lerolerob.domcloud.dev/images/logo.png';
 
 // ---------- Helpers ----------
 const money = (n: number) =>
@@ -34,7 +34,6 @@ const formatMX = (d: Date, withTime = true) =>
     ...(withTime ? { hour: '2-digit', minute: '2-digit', hour12: true } : {}),
   });
 
-// Convierte un asset local a base64 (dataURL)
 async function localAssetToBase64(mod: number) {
   const asset = Asset.fromModule(mod);
   await asset.downloadAsync();
@@ -47,15 +46,12 @@ async function localAssetToBase64(mod: number) {
   return `data:image/${ext};base64,${b64}`;
 }
 
-// Descarga una URL remota y devuelve base64 (dataURL)
 async function fetchRemoteLogoToBase64(url: string) {
-  // Debe ser HTTPS en Android 9+ (tu URL lo es).
   const tmp = FileSystem.cacheDirectory + 'logo-remote';
   const dl = await FileSystem.downloadAsync(url, tmp);
   const b64 = await FileSystem.readAsStringAsync(dl.uri, {
     encoding: FileSystem.EncodingType.Base64,
   });
-  // intenta deducir tipo por header; default png
   const ct = dl.headers['Content-Type'] || dl.headers['content-type'] || '';
   const ext =
     ct.includes('jpeg') || ct.includes('jpg') ? 'jpeg'
@@ -63,6 +59,18 @@ async function fetchRemoteLogoToBase64(url: string) {
       : 'png';
   return `data:image/${ext};base64,${b64}`;
 }
+
+// 🆕 Tipo para resumen por categoría
+type ResumenCategoria = {
+  categoria: string;
+  totalUnidades: number;
+  totalMonto: number;
+  productos: Array<{
+    nombre: string;
+    cantidad: number;
+    precio: number;
+  }>;
+};
 
 // ---------- Componente ----------
 export default function Ticket() {
@@ -74,7 +82,6 @@ export default function Ticket() {
     observaciones,
     fecha,
     cambios,
-    // pago/estado
     metodo_pago,
     forma_pago,
     es_credito,
@@ -91,13 +98,11 @@ export default function Ticket() {
   useEffect(() => {
     (async () => {
       try {
-        // 1) Intenta remoto
         const remote = await fetchRemoteLogoToBase64(REMOTE_LOGO_URL);
         setLogoBase64(remote);
       } catch (e) {
         console.warn('Logo remoto falló, uso local. Detalle:', e);
         try {
-          // 2) Fallback local
           const local = await localAssetToBase64(LOGO_LOCAL);
           setLogoBase64(local);
         } catch (e2) {
@@ -122,6 +127,44 @@ export default function Ticket() {
     const d = new Date(String(fecha || new Date().toISOString()));
     return formatMX(d, true);
   }, [fecha]);
+
+  // 🆕 Calcular resumen por categorías
+  const resumenPorCategoria = useMemo(() => {
+    const mapa = new Map<string, ResumenCategoria>();
+
+    productosList.forEach((p: any) => {
+      // Solo productos normales (no promociones)
+      if (p.producto_id && p.producto) {
+        const categoria = p.producto.categoria?.nombre || 'Sin categoría';
+        const cantidad = Number(p.cantidad || 0);
+        const precio = Number(p.producto.precio || 0);
+        const monto = cantidad * precio;
+
+        if (!mapa.has(categoria)) {
+          mapa.set(categoria, {
+            categoria,
+            totalUnidades: 0,
+            totalMonto: 0,
+            productos: [],
+          });
+        }
+
+        const cat = mapa.get(categoria)!;
+        cat.totalUnidades += cantidad;
+        cat.totalMonto += monto;
+        cat.productos.push({
+          nombre: p.producto.nombre,
+          cantidad,
+          precio,
+        });
+      }
+    });
+
+    // Convertir a array y ordenar por nombre de categoría
+    return Array.from(mapa.values()).sort((a, b) => 
+      a.categoria.localeCompare(b.categoria)
+    );
+  }, [productosList]);
 
   // ---------- Totales ----------
   const subtotalProductos = useMemo(
@@ -232,6 +275,20 @@ export default function Ticket() {
       })
       .join('');
 
+    // 🆕 Generar resumen de categorías para HTML
+    const resumenCategoriasHTML = resumenPorCategoria
+      .map((cat) => `
+        <div style="margin-bottom:8px; padding:8px; background:#f8f9fa; border-radius:6px;">
+          <div style="font-weight:bold; color:#2c3e50; margin-bottom:4px;">
+            📦 ${cat.categoria}
+          </div>
+          <div style="font-size:12px; color:#555;">
+            <strong>${cat.totalUnidades}</strong> unidades · ${money(cat.totalMonto)}
+          </div>
+        </div>
+      `)
+      .join('');
+
     const resumenCambios =
       cambiosList.length > 0
         ? cambiosList.map((c: any) => `<div>${c.producto} x ${c.cantidad} - Motivo: ${c.motivo}</div>`).join('')
@@ -292,6 +349,12 @@ export default function Ticket() {
 
             <div class="line"></div>
             <div class="section">
+              <div><strong>📊 Resumen por Categoría</strong></div>
+              ${resumenCategoriasHTML}
+            </div>
+
+            <div class="line"></div>
+            <div class="section">
               <div><strong>Subtotal productos:</strong> ${money(subtotalProductos)}</div>
               <div><strong>Subtotal promociones:</strong> ${money(subtotalPromos)}</div>
               <div style="color:green;"><strong>Ahorro por promociones:</strong> -${money(ahorroPromos)}</div>
@@ -342,7 +405,6 @@ export default function Ticket() {
           <Text style={styles.label}><Ionicons name="chatbox" /> Observaciones:</Text>
           <Text>{(observaciones as string) || 'Sin observaciones'}</Text>
 
-          {/* Pago / Estado */}
           <Text style={styles.label}><Ionicons name="card" /> Método de pago:</Text>
           <Text>{metodoNice}</Text>
 
@@ -400,6 +462,26 @@ export default function Ticket() {
             return null;
           })}
         </View>
+
+        {/* 🆕 RESUMEN POR CATEGORÍAS */}
+        {resumenPorCategoria.length > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.label}>📊 Resumen por Categoría</Text>
+            {resumenPorCategoria.map((cat, idx) => (
+              <View key={idx} style={styles.categoriaCard}>
+                <View style={styles.categoriaHeader}>
+                  <Text style={styles.categoriaNombre}>📦 {cat.categoria}</Text>
+                </View>
+                <View style={styles.categoriaInfo}>
+                  <Text style={styles.categoriaUnidades}>
+                    <Text style={{ fontWeight: '700' }}>{cat.totalUnidades}</Text> unidades
+                  </Text>
+                  <Text style={styles.categoriaMonto}>{money(cat.totalMonto)}</Text>
+                </View>
+              </View>
+            ))}
+          </View>
+        )}
 
         {cambiosList.length > 0 && (
           <View style={styles.section}>
@@ -475,6 +557,39 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   label: { fontWeight: 'bold', marginTop: 8, marginBottom: 2 },
+  
+  // 🆕 Estilos para cards de categorías
+  categoriaCard: {
+    backgroundColor: '#F8F9FA',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 10,
+    borderLeftWidth: 4,
+    borderLeftColor: Colors.light.primario,
+  },
+  categoriaHeader: {
+    marginBottom: 6,
+  },
+  categoriaNombre: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#2C3E50',
+  },
+  categoriaInfo: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  categoriaUnidades: {
+    fontSize: 14,
+    color: '#555',
+  },
+  categoriaMonto: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: Colors.light.primario,
+  },
+  
   totalContainer: { alignItems: 'flex-end', marginBottom: 16 },
   totalText: { fontSize: 18, fontWeight: 'bold', color: Colors.light.primario },
 

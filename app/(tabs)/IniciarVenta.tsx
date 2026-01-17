@@ -494,47 +494,77 @@ export default function IniciarVenta() {
   };
 
   const finalizarVenta = async () => {
-    const result = await confirmarVenta();
-    if (!result) return;
+  const result = await confirmarVenta();
+  if (!result) return;
 
-    // Evitar re-creación del borrador durante el reseteo de estados
-    justClosedRef.current = true;
-    await clearDraft();
+  // 🔒 BLOQUEAR autosave ANTES de limpiar estados
+  justClosedRef.current = true;
 
-    setClientTxId(newClientTxId());
-    fetchInventario();
+  // 🧹 LIMPIAR borrador del storage
+  await clearDraft();
 
-    router.push({
-      pathname: '/ticket',
-      params: {
-        cliente: JSON.stringify(clienteSeleccionado),
-        productos: JSON.stringify(carrito),
-        cambios: JSON.stringify(cambiosVenta),
-        total: String(result.total.toFixed(2)),
-        observaciones,
-        fecha: new Date().toISOString(),
-        metodo_pago: metodoPagoForTicket(),
-        es_credito: String(esCreditoEfectivo),
-        estado: result.estado,
-        total_pagado: String(result.pagado ?? 0),
-        saldo_pendiente: String(result.saldo_pendiente ?? 0),
-        fecha_vencimiento: venceStr || '',
-        nota_pago: notaPago || '',
-        cliente_id: String(clienteId ?? ''), // opcional, por coherencia
-      },
-    });
+  // 🔄 RESET completo de TODOS los estados
+  setCarrito([]);
+  setCambiosVenta([]);
+  setObservaciones('');
+  setNotaPago('');
+  setVenceStr('');
+  setEsCredito(false);
+  setPagoEfectivo('');
+  setPagoTransfer('');
+  setPagoTarjeta('');
+  setModalVisible(false);
 
-    // limpiar UI
-    setCarrito([]);
-    setCambiosVenta([]);
-    setObservaciones('');
-    setNotaPago('');
-    setVenceStr('');
-    setModalVisible(false);
+  // 🆕 Nuevo ID para siguiente venta
+  setClientTxId(newClientTxId());
 
-    // liberar el flag después de un tick
-    setTimeout(() => { justClosedRef.current = false; }, 500);
-  };
+  // 🔄 Refrescar inventario
+  fetchInventario();
+
+  const carritoConCategoria = carrito.map(item => {
+  // Si es un producto normal (no promoción), asegurar que tenga categoría
+  if (item.producto_id && item.producto) {
+    return {
+      ...item,
+      producto: {
+        ...item.producto,
+        // Asegurarse de que categoría esté presente
+        // (debería venir desde el inventario si actualizaste el controller)
+        categoria: item.producto.categoria || null
+      }
+    };
+  }
+  // Si es promoción, devolver tal cual
+  return item;
+});
+
+  // 📄 Navegar al ticket
+  
+router.push({
+  pathname: '/ticket',
+  params: {
+    cliente: JSON.stringify(clienteSeleccionado),
+    productos: JSON.stringify(carritoConCategoria), // 🆕 Usar carrito con categoría
+    cambios: JSON.stringify(cambiosVenta),
+    total: String(result.total.toFixed(2)),
+    observaciones,
+    fecha: new Date().toISOString(),
+    metodo_pago: metodoPagoForTicket(),
+    es_credito: String(esCreditoEfectivo),
+    estado: result.estado,
+    total_pagado: String(result.pagado ?? 0),
+    saldo_pendiente: String(result.saldo_pendiente ?? 0),
+    fecha_vencimiento: venceStr || '',
+    nota_pago: notaPago || '',
+    cliente_id: String(clienteId ?? ''),
+  },
+});
+
+  // ⏳ Desbloquear autosave después de navegar (con delay seguro)
+  setTimeout(() => {
+    justClosedRef.current = false;
+  }, 1000); // ⚠️ Aumentado a 1 segundo para mayor seguridad
+};
 
   return (
     <SafeAreaView style={styles.container}>

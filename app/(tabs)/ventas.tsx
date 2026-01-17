@@ -46,10 +46,10 @@ export default function Ventas() {
 
   const goIniciar = (c: Cliente, extraParams: Record<string, string> = {}) => {
     const encoded = encodeCliente(c);
-    if (!encoded) return; // evita /IniciarVenta?cliente=null
+    if (!encoded) return;
     router.push({
       pathname: '/IniciarVenta',
-      params: { cliente: encoded, cliente_id: String(c.id), ...extraParams }, // 👈 aseguramos cliente_id
+      params: { cliente: encoded, cliente_id: String(c.id), ...extraParams },
     });
   };
 
@@ -83,19 +83,55 @@ export default function Ventas() {
 
   useEffect(() => { fetchClientes(); }, []);
 
-  // 🔔 Avisar venta pendiente al entrar a la pantalla (solo si es válida)
+  // 🔑 IMPORTANTE: useMemo ANTES de useFocusEffect
+  const clientesFiltrados = useMemo(
+    () => clientes.filter(c => (c.nombre || '').toLowerCase().includes(busqueda.toLowerCase())),
+    [clientes, busqueda]
+  );
+
+  // 🔑 IMPORTANTE: Header memoizado ANTES de useFocusEffect
+  const HeaderComponent = useMemo(() => (
+    <View style={styles.header}>
+      <View style={styles.titleRow}>
+        <Ionicons name="cart-outline" size={20} color={Colors.light.primario} />
+        <Text style={styles.titulo}>Nueva Venta</Text>
+      </View>
+
+      <View style={styles.searchWrap}>
+        <Ionicons name="search" size={18} color="#6B7280" />
+        <TextInput
+          style={styles.input}
+          placeholder="Buscar cliente..."
+          placeholderTextColor="#9CA3AF"
+          value={busqueda}
+          onChangeText={setBusqueda}
+          autoCapitalize="none"
+          autoCorrect={false}
+          returnKeyType="search"
+          clearButtonMode="never"
+        />
+        {busqueda !== '' && (
+          <TouchableOpacity onPress={() => setBusqueda('')} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+            <Ionicons name="close-circle" size={18} color="#9CA3AF" />
+          </TouchableOpacity>
+        )}
+      </View>
+    </View>
+  ), [busqueda]);
+
   useFocusEffect(
     useCallback(() => {
       (async () => {
         const draft = await getDraft();
+        
         if (!draft) return;
 
         const hasClient = !!draft?.cliente?.id;
-        const hasItems  = Array.isArray(draft?.carrito) && draft.carrito.length > 0;
-        const hasTotal  = Number(draft?.total ?? 0) > 0;
+        const hasItems = Array.isArray(draft?.carrito) && draft.carrito.length > 0;
+        const hasTotal = Number(draft?.total ?? 0) > 0;
 
         if (!hasClient || (!hasItems && !hasTotal)) {
-          await clearDraft(); // limpia restos vacíos
+          await clearDraft();
           return;
         }
 
@@ -118,12 +154,18 @@ export default function Ventas() {
                 });
               },
             },
-            { text: 'Descartar', style: 'destructive', onPress: clearDraft },
+            { 
+              text: 'Descartar', 
+              style: 'destructive', 
+              onPress: async () => {
+                await clearDraft();
+              }
+            },
             { text: 'Cerrar', style: 'cancel' },
           ],
         );
       })();
-    }, [])
+    }, [router])
   );
 
   const onRefresh = useCallback(async () => {
@@ -172,23 +214,49 @@ export default function Ventas() {
   };
 
   const intentarIniciarVenta = async (cliente: Cliente) => {
-    // 0) ⛔ si hay borrador, bloquear y ofrecer reanudar/descartar
-    if (await hasDraft()) {
-      const draft = await getDraft();
-      const enc = encodeCliente(draft?.cliente as any);
-      Alert.alert(
-        'Venta pendiente',
-        `Tienes una venta sin cerrar para "${draft?.cliente?.nombre ?? 'cliente'}".`,
-        [
-          { text: 'Reanudar', onPress: () => { if (enc) router.push({ pathname: '/IniciarVenta', params: { cliente: enc, cliente_id: String(draft?.cliente?.id ?? ''), resume: '1' } }); } },
-          { text: 'Descartar', style: 'destructive', onPress: clearDraft },
-          { text: 'Cancelar', style: 'cancel' },
-        ]
-      );
-      return;
+    const draft = await getDraft();
+    
+    if (draft) {
+      const hasValidContent = 
+        draft?.cliente?.id &&
+        (draft.carrito.length > 0 || Number(draft.total ?? 0) > 0);
+      
+      if (hasValidContent) {
+        const enc = encodeCliente(draft?.cliente as any);
+        Alert.alert(
+          'Venta pendiente',
+          `Tienes una venta sin cerrar para "${draft?.cliente?.nombre ?? 'cliente'}".`,
+          [
+            { 
+              text: 'Reanudar', 
+              onPress: () => {
+                if (enc) router.push({ 
+                  pathname: '/IniciarVenta', 
+                  params: { 
+                    cliente: enc, 
+                    cliente_id: String(draft?.cliente?.id ?? ''), 
+                    resume: '1' 
+                  } 
+                });
+              }
+            },
+            { 
+              text: 'Descartar', 
+              style: 'destructive', 
+              onPress: async () => {
+                await clearDraft();
+                setTimeout(() => intentarIniciarVenta(cliente), 300);
+              }
+            },
+            { text: 'Cancelar', style: 'cancel' },
+          ]
+        );
+        return;
+      } else {
+        await clearDraft();
+      }
     }
 
-    // 1) 🔒 bloqueo por saldo del cliente
     if (cliente.bloqueado) {
       Alert.alert(
         'Saldo pendiente',
@@ -208,7 +276,6 @@ export default function Ventas() {
       return;
     }
 
-    // 2) Validar ubicación y continuar
     try {
       setCheckingId(cliente.id);
       const { ok, distancia } = await checkUbicacion(cliente);
@@ -227,11 +294,6 @@ export default function Ventas() {
     }
   };
 
-  const clientesFiltrados = useMemo(
-    () => clientes.filter(c => (c.nombre || '').toLowerCase().includes(busqueda.toLowerCase())),
-    [clientes, busqueda]
-  );
-
   if (loading && !refreshing) {
     return (
       <SafeAreaView style={styles.centered}>
@@ -239,35 +301,6 @@ export default function Ventas() {
       </SafeAreaView>
     );
   }
-
-  const Header = () => (
-    <View style={styles.header}>
-      <View style={styles.titleRow}>
-        <Ionicons name="cart-outline" size={20} color={Colors.light.primario} />
-        <Text style={styles.titulo}>Nueva Venta</Text>
-      </View>
-
-      <View style={styles.searchWrap}>
-        <Ionicons name="search" size={18} color="#6B7280" />
-        <TextInput
-          style={styles.input}
-          placeholder="Buscar cliente..."
-          placeholderTextColor="#9CA3AF"
-          value={busqueda}
-          onChangeText={setBusqueda}
-          autoCapitalize="none"
-          autoCorrect={false}
-          returnKeyType="search"
-          clearButtonMode="never"
-        />
-        {busqueda !== '' && (
-          <TouchableOpacity onPress={() => setBusqueda('')} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-            <Ionicons name="close-circle" size={18} color="#9CA3AF" />
-          </TouchableOpacity>
-        )}
-      </View>
-    </View>
-  );
 
   const renderItem = ({ item }: { item: Cliente }) => {
     const tieneCoords = !!item.latitud && !!item.longitud;
@@ -342,7 +375,7 @@ export default function Ventas() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#fff' }}>
       <FlatList
-        ListHeaderComponent={<Header />}
+        ListHeaderComponent={HeaderComponent}
         stickyHeaderIndices={[0]}
         data={clientesFiltrados}
         keyExtractor={(item) => item.id.toString()}

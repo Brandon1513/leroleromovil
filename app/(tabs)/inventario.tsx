@@ -103,10 +103,19 @@ export default function InventarioScreen() {
               ))}
             </View>
           ) : (
-            <View style={[styles.card,{borderLeftColor: Colors.light.primario, borderLeftWidth: 5 }]}>
+            <View style={[styles.card, { borderLeftColor: Colors.light.primario, borderLeftWidth: 5 }]}>
               {item.producto?.imagen_url && (
                 <Image source={{ uri: item.producto.imagen_url }} style={styles.image} resizeMode="contain" />
               )}
+              
+              {/* 🆕 Mostrar categoría si existe */}
+              {item.producto?.categoria && (
+                <View style={styles.categoriaTag}>
+                  <Ionicons name="pricetags" size={12} color={Colors.light.primario} />
+                  <Text style={styles.categoriaText}>{item.producto.categoria.nombre}</Text>
+                </View>
+              )}
+              
               <Text style={styles.nombre}>
                 <Ionicons name="pricetag-outline" size={16} color={Colors.light.primario} /> {item.producto?.nombre}
               </Text>
@@ -172,6 +181,24 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 3,
     elevation: 3,
+  },
+  // 🆕 Estilos para la etiqueta de categoría
+  categoriaTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#F3F4F6',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    alignSelf: 'flex-start',
+    marginBottom: 8,
+  },
+  categoriaText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: Colors.light.primario,
+    textTransform: 'uppercase',
   },
   nombre: {
     fontSize: 16,

@@ -19,6 +19,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { API_BASE_URL } from "@/constants/Config";
 import { loginStyle } from "../../assets/Styles/login.style";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { setAuthUser } from "@/constants/draftSale"; // ✅ NUEVO
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -31,7 +32,6 @@ export default function LoginScreen() {
 
   const passRef = useRef<TextInput>(null);
 
-  // animaciones
   const opacity = useRef(new Animated.Value(0)).current;
   const scale = useRef(new Animated.Value(0.8)).current;
 
@@ -41,7 +41,6 @@ export default function LoginScreen() {
       Animated.spring(scale, { toValue: 1, friction: 4, useNativeDriver: true }),
     ]).start();
 
-    // si ya hay token, entra directo
     (async () => {
       const token = await AsyncStorage.getItem("authToken");
       if (token) router.replace("/(tabs)");
@@ -65,7 +64,13 @@ export default function LoginScreen() {
       if (!response.ok) throw new Error("Credenciales inválidas");
 
       const data = await response.json();
+
       await AsyncStorage.setItem("authToken", data.token);
+
+      // ✅ Guarda user (para borrar/leer borrador por usuario)
+      if (data?.user?.id) {
+        await setAuthUser({ id: data.user.id, name: data.user.name, email: data.user.email });
+      }
 
       Toast.show({ type: "success", text1: "Inicio de sesión exitoso" });
       router.replace("/(tabs)");
@@ -75,9 +80,6 @@ export default function LoginScreen() {
       setLoading(false);
     }
   };
-
-  // Para pruebas rápidas:
-  // const pruebaLogin = () => { AsyncStorage.setItem("authToken", "fake-token"); router.replace("/(tabs)"); };
 
   return (
     <SafeAreaView style={loginStyle.safe} edges={["top", "left", "right"]}>
@@ -138,14 +140,9 @@ export default function LoginScreen() {
               onPress={handleLogin}
               disabled={loading}
             >
-              {loading ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={loginStyle.buttonText}>Ingresar</Text>
-              )}
+              {loading ? <ActivityIndicator color="#fff" /> : <Text style={loginStyle.buttonText}>Ingresar</Text>}
             </TouchableOpacity>
 
-            {/* Espaciador para evitar que el botón quede bajo el teclado */}
             <View style={{ height: 24 }} />
           </ScrollView>
         </TouchableWithoutFeedback>

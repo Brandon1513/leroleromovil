@@ -1,13 +1,6 @@
-// index.tsx (HomeScreen)
+// app/(tabs)/index.tsx  (HomeScreen)
 import React, { useEffect, useState, useCallback } from 'react';
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  FlatList,
-  Alert,
-  StyleSheet,
-} from 'react-native';
+import { View, Text, TouchableOpacity, FlatList, Alert, StyleSheet } from 'react-native';
 import { Colors } from '@/constants/Colors';
 import { homeStyle } from '@/assets/Styles/Home.style';
 import { Ionicons, Feather } from '@expo/vector-icons';
@@ -15,15 +8,16 @@ import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { getDraft, clearDraft } from '@/constants/draftSale';
 import { useFocusEffect } from '@react-navigation/native';
+import Toast from 'react-native-toast-message';
 
 type Option = { id: string; label: string; icon: JSX.Element; route: string };
 
 const baseOptions: Option[] = [
-  { id: '1', label: 'Clientes',   icon: <Feather  name="users" size={32} color={Colors.light.primario} />, route: '/(tabs)/clientes' },
-  { id: '2', label: 'Inventario', icon: <Ionicons name="cube-outline" size={32} color={Colors.light.primario} />, route: '/(tabs)/inventario' },
-  { id: '3', label: 'Nueva Venta',icon: <Ionicons name="add-circle-outline" size={32} color={Colors.light.primario} />, route: '/(tabs)/ventas' },
-  { id: '4', label: 'Perfil',     icon: <Ionicons name="person-outline" size={32} color={Colors.light.primario} />, route: '/(tabs)/perfil' },
-  { id: '5', label: 'Rutas',      icon: <Ionicons name="map-outline" size={32} color={Colors.light.primario} />, route: '/(tabs)/ruta' },
+  { id: '1', label: 'Clientes',    icon: <Feather  name="users" size={32} color={Colors.light.primario} />, route: '/(tabs)/clientes' },
+  { id: '2', label: 'Inventario',  icon: <Ionicons name="cube-outline" size={32} color={Colors.light.primario} />, route: '/(tabs)/inventario' },
+  { id: '3', label: 'Nueva Venta', icon: <Ionicons name="add-circle-outline" size={32} color={Colors.light.primario} />, route: '/(tabs)/ventas' },
+  { id: '4', label: 'Perfil',      icon: <Ionicons name="person-outline" size={32} color={Colors.light.primario} />, route: '/(tabs)/perfil' },
+  { id: '5', label: 'Rutas',       icon: <Ionicons name="map-outline" size={32} color={Colors.light.primario} />, route: '/(tabs)/ruta' },
 ];
 
 const MAX_DRAFT_AGE_MS = 2 * 60 * 60 * 1000; // 2h
@@ -43,18 +37,17 @@ const timeAgo = (iso?: string) => {
   return `hace ${days} d`;
 };
 
-// Decide si se debe mostrar el banner
+// Mostramos el banner SOLO si hay venta realmente “activa” (con productos y total)
 const shouldShowDraft = (d: any): boolean => {
   if (!d) return false;
-  if (d.completed) return false; // el backend ya la registró
+  if (!d?.cliente?.id) return false;
+
   const carritoLen = Array.isArray(d.carrito) ? d.carrito.length : 0;
   if (carritoLen === 0) return false;
 
-  // total > 0 (si no vino, acepta 0)
   const total = Number(d.total || 0);
   if (total <= 0) return false;
 
-  // reciente
   const started = d.startedAt ? new Date(d.startedAt).getTime() : 0;
   if (!started || (Date.now() - started) > MAX_DRAFT_AGE_MS) return false;
 
@@ -65,58 +58,90 @@ export default function HomeScreen() {
   const router = useRouter();
   const [options] = useState<Option[]>(baseOptions);
 
-  const [hasDraft, setHasDraft]   = useState(false);
+  const [hasDraft, setHasDraft] = useState(false);
   const [draftClient, setDraftClient] = useState<string>('');
-  const [draftTotal, setDraftTotal]   = useState<number>(0);
-  const [draftWhen, setDraftWhen]     = useState<string>('');
+  const [draftTotal, setDraftTotal] = useState<number>(0);
+  const [draftWhen, setDraftWhen] = useState<string>('');
 
   const loadDraft = useCallback(async () => {
-    try {
-      const d = await getDraft();
+  try {
+    const d = await getDraft();
+    
+    // ✅ Validación más estricta
+    const hasClient = !!d?.cliente?.id;
+    const hasItems = Array.isArray(d?.carrito) && d.carrito.length > 0;
+    const hasTotal = Number(d?.total ?? 0) > 0;
+    
+    // ❌ Debe tener cliente Y (items O total) para ser válido
+    const isValid = hasClient && (hasItems || hasTotal);
+    
+    const show = isValid && shouldShowDraft(d);
 
-      // Si el draft está marcado como completado, lo limpiamos silenciosamente
-      if (d?.completed) {
-        await clearDraft();
-        setHasDraft(false);
-        setDraftClient('');
-        setDraftTotal(0);
-        setDraftWhen('');
-        return;
-      }
+    // ✅ Si hay draft inválido, limpiarlo
+    if (d && !isValid) {
+      await clearDraft();
+    }
 
-      const show = shouldShowDraft(d);
-      setHasDraft(show);
-      if (show) {
-        setDraftClient(d?.cliente?.nombre || '');
-        setDraftTotal(Number(d?.total || 0));
-        setDraftWhen(d?.startedAt || '');
-      } else {
-        setDraftClient('');
-        setDraftTotal(0);
-        setDraftWhen('');
-      }
-    } catch {
-      setHasDraft(false);
+    setHasDraft(show);
+
+    if (show) {
+      setDraftClient(d?.cliente?.nombre || '');
+      setDraftTotal(Number(d?.total || 0));
+      setDraftWhen(d?.startedAt || '');
+    } else {
       setDraftClient('');
       setDraftTotal(0);
       setDraftWhen('');
     }
-  }, []);
+  } catch {
+    setHasDraft(false);
+    setDraftClient('');
+    setDraftTotal(0);
+    setDraftWhen('');
+  }
+}, []);
 
   useEffect(() => { loadDraft(); }, [loadDraft]);
   useFocusEffect(useCallback(() => { loadDraft(); }, [loadDraft]));
 
-  const resumeSale = () => {
-    router.push('/IniciarVenta?resume=1'); // reanuda con el borrador existente
-  };
+  const resumeSale = useCallback(async () => {
+  const d = await getDraft();
+  if (!d?.cliente?.id) return;
 
-  const discardSale = async () => {
+  const enc = encodeURIComponent(JSON.stringify({
+    id: d.cliente.id,
+    nombre: d.cliente.nombre || ''
+  }));
+
+  router.push({
+    pathname: '/IniciarVenta',
+    params: {
+      cliente: enc,
+      cliente_id: String(d.cliente.id), // ⚠️ IMPORTANTE: pasar cliente_id
+      resume: '1',
+      rid: String(d.draft_id || Date.now().toString()),
+    },
+  });
+}, [router]);
+
+  const discardSale = useCallback(async () => {
+  try {
     await clearDraft();
     setHasDraft(false);
     setDraftClient('');
     setDraftTotal(0);
     setDraftWhen('');
-  };
+    
+    // ✅ Feedback opcional al usuario
+    Toast.show({ 
+      type: 'success', 
+      text1: 'Venta descartada', 
+      text2: 'Puedes iniciar una nueva venta' 
+    });
+  } catch (error) {
+    console.error('Error al descartar venta:', error);
+  }
+}, []);
 
   const handlePress = (item: Option) => {
     if (item.id === '3' && hasDraft) {
@@ -160,7 +185,6 @@ export default function HomeScreen() {
     <SafeAreaView style={homeStyle.container}>
       <Text style={homeStyle.title}>Bienvenido 👋</Text>
 
-      {/* Banner de venta en curso (solo si aplica) */}
       {hasDraft && (
         <View style={styles.banner}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -196,21 +220,16 @@ export default function HomeScreen() {
         contentContainerStyle={homeStyle.grid}
       />
 
-      {/* FAB flotante */}
       <TouchableOpacity
         accessibilityLabel={hasDraft ? 'Reanudar venta en borrador' : 'Crear nueva venta'}
         style={styles.fab}
         onPress={() => (hasDraft ? resumeSale() : router.push('/(tabs)/ventas'))}
         onLongPress={() => {
           if (!hasDraft) return;
-          Alert.alert(
-            'Descartar venta',
-            '¿Deseas descartar el borrador actual?',
-            [
-              { text: 'Cancelar', style: 'cancel' },
-              { text: 'Descartar', style: 'destructive', onPress: discardSale },
-            ]
-          );
+          Alert.alert('Descartar venta', '¿Deseas descartar el borrador actual?', [
+            { text: 'Cancelar', style: 'cancel' },
+            { text: 'Descartar', style: 'destructive', onPress: discardSale },
+          ]);
         }}
         activeOpacity={0.85}
       >
