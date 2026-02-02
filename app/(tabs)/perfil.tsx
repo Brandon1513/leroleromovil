@@ -11,6 +11,9 @@ import { useRouter } from "expo-router";
 import Toast from "react-native-toast-message";
 import { Ionicons } from "@expo/vector-icons";
 import { perfilStyle } from "@/assets/Styles/Perfil.style";
+import { API_BASE_URL } from "@/constants/Config";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { Colors } from "@/constants/Colors";
 
 export default function PerfilScreen() {
   const router = useRouter();
@@ -26,7 +29,7 @@ export default function PerfilScreen() {
       if (!token) return router.replace("/(auth)/login");
 
       try {
-        const res = await fetch("http://192.168.1.222/api/me", {
+        const res = await fetch(`${API_BASE_URL}/api/me`, {
           headers: {
             Accept: "application/json",
             Authorization: `Bearer ${token}`,
@@ -59,7 +62,7 @@ export default function PerfilScreen() {
     const token = await AsyncStorage.getItem("authToken");
 
     try {
-      const res = await fetch("http://192.168.1.222/api/update-password", {
+      const res = await fetch(`${API_BASE_URL}/api/update-password`, {
         method: "POST",
         headers: {
           Accept: "application/json",
@@ -77,13 +80,11 @@ export default function PerfilScreen() {
         throw new Error(data.message || "Error al actualizar contraseña");
       }
 
-      // ✅ Mostrar mensaje
       Toast.show({
         type: "success",
         text1: "Contraseña actualizada correctamente. Inicia sesión de nuevo.",
       });
 
-      // ✅ Eliminar token y redirigir a login
       setTimeout(async () => {
         await AsyncStorage.removeItem("authToken");
         router.replace("/(auth)/login");
@@ -94,66 +95,83 @@ export default function PerfilScreen() {
   };
 
   return (
-    <ScrollView contentContainerStyle={perfilStyle.container}>
-      <Text style={perfilStyle.title}>Mi Perfil</Text>
-
-      <Text style={perfilStyle.label}>Nombre</Text>
-      <Text style={perfilStyle.info}>{user.name}</Text>
-
-      <Text style={perfilStyle.label}>Correo electrónico</Text>
-      <Text style={perfilStyle.info}>{user.email}</Text>
-
-      <Text style={[perfilStyle.title, { marginTop: 40 }]}>Cambiar Contraseña</Text>
-
-      <View style={perfilStyle.inputWrapper}>
-        <TextInput
-          placeholder="Nueva contraseña"
-          secureTextEntry={!showPassword}
-          style={perfilStyle.input}
-          value={password}
-          onChangeText={setPassword}
-        />
-        <TouchableOpacity
-          onPress={() => setShowPassword(!showPassword)}
-          style={perfilStyle.eyeIcon}
-        >
+    <SafeAreaView style={{ flex: 1, backgroundColor: "#f5f5f5" }}>
+      <ScrollView contentContainerStyle={perfilStyle.container}>
+        <Text style={perfilStyle.title}>👤 Mi Perfil</Text>
+        <View style={perfilStyle.card}>
           <Ionicons
-            name={showPassword ? "eye-off" : "eye"}
-            size={20}
-            color="#666"
+            name="person-circle-outline"
+            size={40}
+            color={Colors.light.primario}
+            style={{ alignSelf: "center" }}
           />
-        </TouchableOpacity>
-      </View>
+          <Text style={perfilStyle.label}>Nombre</Text>
+          <Text style={perfilStyle.info}>{user.name}</Text>
 
-      <View style={perfilStyle.inputWrapper}>
-        <TextInput
-          placeholder="Confirmar contraseña"
-          secureTextEntry={!showConfirm}
-          style={perfilStyle.input}
-          value={confirmPassword}
-          onChangeText={setConfirmPassword}
-        />
+          <Text style={perfilStyle.label}>Correo electrónico</Text>
+          <Text style={perfilStyle.info}>{user.email}</Text>
+        </View>
+
+        <Text style={[perfilStyle.title, { marginTop: 20, marginBottom: 10 }]}>
+          🔒 Cambiar Contraseña
+        </Text>
+
+        <View style={perfilStyle.inputWrapper}>
+          <TextInput
+            placeholder="Nueva contraseña"
+            placeholderTextColor="#000000"  // Cambia a cualquier color
+            secureTextEntry={!showPassword}
+            style={perfilStyle.input}
+            value={password}
+            onChangeText={setPassword}
+          />
+          <TouchableOpacity
+            onPress={() => setShowPassword(!showPassword)}
+            style={perfilStyle.eyeIcon}
+          >
+            <Ionicons
+              name={showPassword ? "eye-off" : "eye"}
+              size={20}
+              color="#666"
+            />
+          </TouchableOpacity>
+        </View>
+
+        <View style={perfilStyle.inputWrapper}>
+          <TextInput
+            placeholder="Confirmar contraseña"
+            placeholderTextColor="#000000"  // Cambia a cualquier color
+            secureTextEntry={!showConfirm}
+            style={perfilStyle.input}
+            value={confirmPassword}
+            onChangeText={setConfirmPassword}
+          />
+          <TouchableOpacity
+            onPress={() => setShowConfirm(!showConfirm)}
+            style={perfilStyle.eyeIcon}
+          >
+            <Ionicons
+              name={showConfirm ? "eye-off" : "eye"}
+              size={20}
+              color="#666"
+            />
+          </TouchableOpacity>
+        </View>
+
         <TouchableOpacity
-          onPress={() => setShowConfirm(!showConfirm)}
-          style={perfilStyle.eyeIcon}
+          style={perfilStyle.button}
+          onPress={handlePasswordChange}
         >
-          <Ionicons
-            name={showConfirm ? "eye-off" : "eye"}
-            size={20}
-            color="#666"
-          />
+          <Text style={perfilStyle.buttonText}>Actualizar contraseña</Text>
         </TouchableOpacity>
-      </View>
 
-      <TouchableOpacity style={perfilStyle.button} onPress={handlePasswordChange}>
-        <Text style={perfilStyle.buttonText}>Actualizar contraseña</Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity style={perfilStyle.logoutButton} onPress={handleLogout}>
-        <Text style={perfilStyle.logoutText}>Cerrar sesión</Text>
-      </TouchableOpacity>
-    </ScrollView>
+        <TouchableOpacity
+          style={perfilStyle.logoutButton}
+          onPress={handleLogout}
+        >
+          <Text style={perfilStyle.logoutText}>Cerrar sesión</Text>
+        </TouchableOpacity>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
-
-
