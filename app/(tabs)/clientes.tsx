@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   View,
   Text,
@@ -40,7 +41,14 @@ export default function ClientesScreen() {
     }
   };
 
-  useEffect(() => { fetchClientes(); }, []);
+  // ✅ FIX: recarga clientes (saldos, estados) cada vez que entras a la pantalla.
+  // Antes con useEffect([], []) los saldos pendientes no actualizaban
+  // después de registrar una cobranza o venta.
+  useFocusEffect(
+    useCallback(() => {
+      fetchClientes();
+    }, [])
+  );
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);

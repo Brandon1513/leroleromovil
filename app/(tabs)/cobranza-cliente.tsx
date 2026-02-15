@@ -152,16 +152,16 @@ export default function CobranzaCliente() {
 
       const json = await res.json();
       if (!res.ok) {
-        Toast.show({ type: 'error', text1: 'Error al abonar', text2: json?.message || 'Revisa los datos' });
+        Toast.show({ type: 'error', position:'top', text1: 'Error al abonar', text2: json?.message || 'Revisa los datos' });
         return;
       }
 
-      Toast.show({ type: 'success', text1: 'Abono registrado', text2: `Venta #${ventaSel.id} ${json?.estado ? `(${json.estado})` : ''}` });
+      Toast.show({ type: 'success', position:'top', text1: 'Abono registrado', text2: `Venta #${ventaSel.id} ${json?.estado ? `(${json.estado})` : ''}` });
       setModalVisible(false);
       setVentaSel(null);
       fetchVentasCredito();
     } catch (e: any) {
-      Toast.show({ type: 'error', text1: 'Error de red', text2: e?.message || 'No se pudo conectar' });
+      Toast.show({ type: 'error', position:'top', text1: 'Error de red', text2: e?.message || 'No se pudo conectar' });
     }
   };
 
@@ -357,7 +357,7 @@ export default function CobranzaCliente() {
         </KeyboardAvoidingView>
       </Modal>
 
-      <Toast />
+      <Toast topOffset={60}  />
     </SafeAreaView>
   );
 }

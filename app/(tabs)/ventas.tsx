@@ -11,7 +11,7 @@ import { Colors } from '@/constants/Colors';
 import { API_BASE_URL } from '@/constants/Config';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
-import { getDraft, hasDraft, clearDraft } from '@/constants/draftSale';
+import { getDraft, clearDraft } from '@/constants/draftSale';
 
 type Cliente = {
   id: number;
@@ -22,7 +22,17 @@ type Cliente = {
   nivel_precio?: { nombre?: string | null } | null;
   nivel_precio_nombre?: string | null;
   saldo_pendiente_total?: number;
-  bloqueado?: boolean;
+  bloqueado?: boolean; // saldo pendiente
+};
+
+type MeResponse = {
+  id: number;
+  name: string;
+  email: string;
+  ventas_bloqueadas?: boolean | number;
+  ventas_bloqueadas_desde?: string | null;
+  ventas_bloqueadas_motivo?: string | null;
+  ventas_bloqueadas_cierre_id?: number | null;
 };
 
 const RADIUS_METERS = 100;
@@ -34,6 +44,13 @@ export default function Ventas() {
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [checkingId, setCheckingId] = useState<number | null>(null);
+
+  // ✅ bloqueo ventas por cierre ruta
+  const [ventasBloqueadas, setVentasBloqueadas] = useState(false);
+  const [ventasBloqueadasMotivo, setVentasBloqueadasMotivo] = useState<string | null>(null);
+  const [ventasBloqueadasCierreId, setVentasBloqueadasCierreId] = useState<number | null>(null);
+  const [checkingMe, setCheckingMe] = useState(false);
+
   const router = useRouter();
 
   // Helpers de navegación segura → IniciarVenta
@@ -52,6 +69,57 @@ export default function Ventas() {
       params: { cliente: encoded, cliente_id: String(c.id), ...extraParams },
     });
   };
+
+  // ✅ helper: /api/me
+  const fetchMe = useCallback(async () => {
+    const token = await AsyncStorage.getItem('authToken');
+    if (!token) {
+      setVentasBloqueadas(false);
+      setVentasBloqueadasMotivo(null);
+      setVentasBloqueadasCierreId(null);
+      return { blocked: false };
+    }
+
+    try {
+      setCheckingMe(true);
+      const res = await fetch(`${API_BASE_URL}/api/me`, {
+        headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+      });
+
+      if (!res.ok) {
+        setVentasBloqueadas(false);
+        setVentasBloqueadasMotivo(null);
+        setVentasBloqueadasCierreId(null);
+        return { blocked: false };
+      }
+
+      const me: MeResponse = await res.json();
+      const blocked = Boolean(me?.ventas_bloqueadas);
+
+      setVentasBloqueadas(blocked);
+      setVentasBloqueadasMotivo(me?.ventas_bloqueadas_motivo ?? null);
+      setVentasBloqueadasCierreId(me?.ventas_bloqueadas_cierre_id ?? null);
+
+      return { blocked, motivo: me?.ventas_bloqueadas_motivo ?? null, cierreId: me?.ventas_bloqueadas_cierre_id ?? null };
+    } catch {
+      setVentasBloqueadas(false);
+      setVentasBloqueadasMotivo(null);
+      setVentasBloqueadasCierreId(null);
+      return { blocked: false };
+    } finally {
+      setCheckingMe(false);
+    }
+  }, []);
+
+  const showBlockedAlert = useCallback((motivo?: string | null, cierreId?: number | null) => {
+    const msg =
+      `Tus ventas están bloqueadas.\n` +
+      (motivo ? `\nMotivo: ${motivo}\n` : '') +
+      (cierreId ? `\nCierre ID: ${cierreId}\n` : '') +
+      `\nPara vender de nuevo debes solicitar liberación al administrador.`;
+
+    Alert.alert('Ventas bloqueadas', msg, [{ text: 'Entendido' }]);
+  }, []);
 
   const fetchClientes = async () => {
     try {
@@ -81,7 +149,13 @@ export default function Ventas() {
     }
   };
 
-  useEffect(() => { fetchClientes(); }, []);
+  useEffect(() => {
+    // primera carga: checar bloqueo + clientes
+    (async () => {
+      await fetchMe();
+      await fetchClientes();
+    })();
+  }, [fetchMe]);
 
   // 🔑 IMPORTANTE: useMemo ANTES de useFocusEffect
   const clientesFiltrados = useMemo(
@@ -96,6 +170,20 @@ export default function Ventas() {
         <Ionicons name="cart-outline" size={20} color={Colors.light.primario} />
         <Text style={styles.titulo}>Nueva Venta</Text>
       </View>
+
+      {/* ✅ banner bloqueo */}
+      {ventasBloqueadas && (
+        <TouchableOpacity
+          activeOpacity={0.9}
+          onPress={() => showBlockedAlert(ventasBloqueadasMotivo, ventasBloqueadasCierreId)}
+          style={styles.blockBanner}
+        >
+          <Ionicons name="lock-closed-outline" size={16} color="#991B1B" />
+          <Text style={styles.blockBannerText} numberOfLines={2}>
+            Ventas bloqueadas. {ventasBloqueadasMotivo ? `Motivo: ${ventasBloqueadasMotivo}` : 'Pendiente de liberación.'}
+          </Text>
+        </TouchableOpacity>
+      )}
 
       <View style={styles.searchWrap}>
         <Ionicons name="search" size={18} color="#6B7280" />
@@ -117,13 +205,20 @@ export default function Ventas() {
         )}
       </View>
     </View>
-  ), [busqueda]);
+  ), [busqueda, ventasBloqueadas, ventasBloqueadasMotivo, ventasBloqueadasCierreId, showBlockedAlert]);
 
   useFocusEffect(
     useCallback(() => {
+      // cada vez que vuelves a la pantalla:
+      // 1) checar bloqueo
+      // ✅ FIX: 2) recargar clientes — antes NUNCA se recargaba al volver,
+      //    así que los saldos y estados quedaban desactualizados
+      // 3) checar borrador
       (async () => {
+        await fetchMe();
+        await fetchClientes(); // ← LÍNEA CLAVE QUE FALTABA
+
         const draft = await getDraft();
-        
         if (!draft) return;
 
         const hasClient = !!draft?.cliente?.id;
@@ -154,9 +249,9 @@ export default function Ventas() {
                 });
               },
             },
-            { 
-              text: 'Descartar', 
-              style: 'destructive', 
+            {
+              text: 'Descartar',
+              style: 'destructive',
               onPress: async () => {
                 await clearDraft();
               }
@@ -165,13 +260,14 @@ export default function Ventas() {
           ],
         );
       })();
-    }, [router])
+    }, [router, fetchMe])
   );
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
+    await fetchMe();
     await fetchClientes();
-  }, []);
+  }, [fetchMe]);
 
   const calcularDistancia = (lat1: number, lon1: number, lat2: number, lon2: number) => {
     const R = 6371e3;
@@ -214,35 +310,42 @@ export default function Ventas() {
   };
 
   const intentarIniciarVenta = async (cliente: Cliente) => {
+    // ✅ bloqueo global por cierre
+    const me = await fetchMe();
+    if (me?.blocked) {
+      showBlockedAlert(me.motivo ?? ventasBloqueadasMotivo, me.cierreId ?? ventasBloqueadasCierreId);
+      return;
+    }
+
+    // borrador
     const draft = await getDraft();
-    
     if (draft) {
-      const hasValidContent = 
+      const hasValidContent =
         draft?.cliente?.id &&
         (draft.carrito.length > 0 || Number(draft.total ?? 0) > 0);
-      
+
       if (hasValidContent) {
         const enc = encodeCliente(draft?.cliente as any);
         Alert.alert(
           'Venta pendiente',
           `Tienes una venta sin cerrar para "${draft?.cliente?.nombre ?? 'cliente'}".`,
           [
-            { 
-              text: 'Reanudar', 
+            {
+              text: 'Reanudar',
               onPress: () => {
-                if (enc) router.push({ 
-                  pathname: '/IniciarVenta', 
-                  params: { 
-                    cliente: enc, 
-                    cliente_id: String(draft?.cliente?.id ?? ''), 
-                    resume: '1' 
-                  } 
+                if (enc) router.push({
+                  pathname: '/IniciarVenta',
+                  params: {
+                    cliente: enc,
+                    cliente_id: String(draft?.cliente?.id ?? ''),
+                    resume: '1'
+                  }
                 });
               }
             },
-            { 
-              text: 'Descartar', 
-              style: 'destructive', 
+            {
+              text: 'Descartar',
+              style: 'destructive',
               onPress: async () => {
                 await clearDraft();
                 setTimeout(() => intentarIniciarVenta(cliente), 300);
@@ -257,6 +360,7 @@ export default function Ventas() {
       }
     }
 
+    // bloqueo por saldo
     if (cliente.bloqueado) {
       Alert.alert(
         'Saldo pendiente',
@@ -304,7 +408,8 @@ export default function Ventas() {
 
   const renderItem = ({ item }: { item: Cliente }) => {
     const tieneCoords = !!item.latitud && !!item.longitud;
-    const blocked = Boolean(item.bloqueado);
+    const blockedSaldo = Boolean(item.bloqueado);
+
     return (
       <TouchableOpacity activeOpacity={0.9} onPress={() => intentarIniciarVenta(item)} style={styles.card}>
         <View style={styles.cardHeader}>
@@ -314,13 +419,17 @@ export default function Ventas() {
           </View>
 
           <TouchableOpacity
-            style={[styles.actionBtn, blocked && styles.actionBtnWarn]}
+            style={[
+              styles.actionBtn,
+              blockedSaldo && styles.actionBtnWarn,
+              ventasBloqueadas && styles.actionBtnDisabled,
+            ]}
             onPress={(e) => { e.stopPropagation(); intentarIniciarVenta(item); }}
-            disabled={checkingId === item.id}
+            disabled={checkingId === item.id || ventasBloqueadas || checkingMe}
           >
-            {checkingId === item.id ? (
+            {checkingId === item.id || checkingMe ? (
               <ActivityIndicator size="small" color="#fff" />
-            ) : blocked ? (
+            ) : blockedSaldo ? (
               <>
                 <Ionicons name="cash-outline" size={16} color="#fff" />
                 <Text style={styles.actionText}>Cobranza</Text>
@@ -359,11 +468,20 @@ export default function Ventas() {
             </Text>
           </View>
 
-          {blocked && (
+          {blockedSaldo && (
             <View style={[styles.badge, styles.badgeDebt]}>
               <Ionicons name="warning-outline" size={14} color="#991B1B" />
               <Text style={[styles.badgeText, { color: '#991B1B' }]}>
                 Saldo: {money(item.saldo_pendiente_total)}
+              </Text>
+            </View>
+          )}
+
+          {ventasBloqueadas && (
+            <View style={[styles.badge, styles.badgeBlocked]}>
+              <Ionicons name="lock-closed-outline" size={14} color="#7F1D1D" />
+              <Text style={[styles.badgeText, { color: '#7F1D1D' }]}>
+                Ventas bloqueadas
               </Text>
             </View>
           )}
@@ -407,6 +525,20 @@ const styles = StyleSheet.create({
   header: { backgroundColor: '#fff', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 12, borderBottomColor: '#E5E7EB', borderBottomWidth: 1 },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
   titulo: { fontSize: 20, fontWeight: '800', color: Colors.light.primario },
+
+  blockBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 10,
+    borderRadius: 12,
+    backgroundColor: '#FEE2E2',
+    borderWidth: 1,
+    borderColor: '#FCA5A5',
+    marginBottom: 10,
+  },
+  blockBannerText: { flex: 1, fontWeight: '800', color: '#991B1B', fontSize: 12 },
+
   searchWrap: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#F2F2F2', borderRadius: 12, paddingHorizontal: 12, height: 44, borderWidth: 1, borderColor: '#E5E7EB' },
   input: { flex: 1, height: 44, color: '#111827' },
   card: { backgroundColor: '#fff', padding: 14, borderRadius: 14, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 6, elevation: 2 },
@@ -417,12 +549,14 @@ const styles = StyleSheet.create({
   text: { fontSize: 14, marginLeft: 8, color: '#4B5563' },
   actionBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: Colors.light.primario, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999 },
   actionBtnWarn: { backgroundColor: '#B91C1C' },
+  actionBtnDisabled: { opacity: 0.55 },
   actionText: { color: '#fff', fontWeight: '700' },
   badges: { flexDirection: 'row', gap: 8, marginTop: 10, flexWrap: 'wrap' },
   badge: { flexDirection: 'row', gap: 6, alignItems: 'center', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999 },
   badgeOk: { backgroundColor: '#ECFDF5', borderColor: '#A7F3D0', borderWidth: 1 },
   badgeWarn: { backgroundColor: '#FFFBEB', borderColor: '#FCD34D', borderWidth: 1 },
   badgeDebt: { backgroundColor: '#FEE2E2', borderColor: '#FCA5A5', borderWidth: 1 },
+  badgeBlocked: { backgroundColor: '#FEE2E2', borderColor: '#FCA5A5', borderWidth: 1 },
   badgeText: { fontSize: 12, fontWeight: '700' },
   empty: { paddingTop: 48, alignItems: 'center', gap: 8 },
   emptyTitle: { fontWeight: '800', color: '#111827', fontSize: 16 },

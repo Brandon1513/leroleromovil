@@ -1,7 +1,9 @@
+// IniciarVenta.tsx
 import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import {
-  View, Text, TextInput, FlatList, TouchableOpacity, StyleSheet, Modal,
-  Alert, Image, RefreshControl, KeyboardAvoidingView, Platform, ScrollView
+  View, Text, TextInput, FlatList, TouchableOpacity, StyleSheet,
+  Alert, Image, RefreshControl
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -10,16 +12,12 @@ import Toast from 'react-native-toast-message';
 import { Colors } from '@/constants/Colors';
 import { API_BASE_URL } from '@/constants/Config';
 import CambiosModal from '@/components/CambiosModal';
+import ResumenVentaModal from '@/components/ventas/ResumenVentaModal';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { getDraft, setDraft, clearDraft, type DraftSale } from '@/constants/draftSale';
+import { getDraft, setDraft, clearDraft } from '@/constants/draftSale';
 import * as Random from 'expo-random';
 
-// ⬇️ Opcional: selector de fecha nativo
-let DateTimePicker: any;
-try {
-  DateTimePicker = require('@react-native-community/datetimepicker').default;
-} catch { /* no-op */ }
-
+// Helpers de dinero
 const money = (n: number) =>
   new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(Number(n || 0));
 
@@ -38,15 +36,47 @@ const addDays = (d: Date, n: number) => {
 
 const newClientTxId = () => {
   const b = Random.getRandomBytes(8);
-  return `${Date.now()}-${Array.from(b).map(n => n.toString(16).padStart(2,'0')).join('')}`;
+  return `${Date.now()}-${Array.from(b).map(n => n.toString(16).padStart(2, '0')).join('')}`;
+};
+
+type CategoriaItem = {
+  id: number;
+  nombre: string;
+  productos_count?: number;
+  stock_total?: number;
+};
+
+// 👇 lo que vamos a imprimir en ticket cuando hubo cambios
+type CambioTicketItem = {
+  producto: string;
+  cantidad: number;
+  motivo?: string;
+  lote?: string | null;
+  fecha_caducidad?: string | null;
+  sustituciones?: Array<{
+    producto: string;
+    cantidad: number;
+    lote?: string | null;
+    fecha_caducidad?: string | null;
+  }>;
+};
+
+// 👇 lo que regresa el CambiosModal al guardar
+type CambiosSaveResult = {
+  rechazosIds?: number[];
+  ticketItems?: CambioTicketItem[];
+};
+
+type MeResponse = {
+  ventas_bloqueadas?: boolean;
+  ventas_bloqueadas_motivo?: string | null;
+  ventas_bloqueadas_cierre_id?: number | null;
 };
 
 export default function IniciarVenta() {
-  // ahora aceptamos también cliente_id como param plano
   const { cliente, cliente_id, resume } = useLocalSearchParams();
   const clienteSeleccionado = cliente ? JSON.parse(decodeURIComponent(cliente as string)) : null;
 
-  // 👇 nueva fuente de verdad para POST
   const [clienteId, setClienteId] = useState<number | null>(
     cliente_id ? Number(cliente_id) : (clienteSeleccionado?.id ?? null)
   );
@@ -55,15 +85,20 @@ export default function IniciarVenta() {
   const [promociones, setPromociones] = useState<any[]>([]);
   const [busqueda, setBusqueda] = useState('');
   const [observaciones, setObservaciones] = useState('');
-  const [notaPago, setNotaPago] = useState('');     // referencia/nota
-  const [venceStr, setVenceStr] = useState('');     // YYYY-MM-DD
-
-  const [showPicker, setShowPicker] = useState(false); // selector nativo
+  const [notaPago, setNotaPago] = useState('');
+  const [venceStr, setVenceStr] = useState('');
+  const [showPicker, setShowPicker] = useState(false);
 
   const [carrito, setCarrito] = useState<any[]>([]);
   const [modalVisible, setModalVisible] = useState(false);
+
+  // Cambios (devueltos / rechazo)
   const [cambiosVenta, setCambiosVenta] = useState<any[]>([]);
   const [modalCambiosVisible, setModalCambiosVisible] = useState(false);
+
+  const [cambiosTicket, setCambiosTicket] = useState<CambioTicketItem[]>([]);
+  const [rechazosIds, setRechazosIds] = useState<number[]>([]);
+
   const [refreshing, setRefreshing] = useState(false);
 
   // pagos
@@ -76,15 +111,84 @@ export default function IniciarVenta() {
   const [isSaving, setIsSaving] = useState(false);
   const [clientTxId, setClientTxId] = useState<string>(newClientTxId());
 
-  const justClosedRef = useRef(false); // ⛳️ evita autosave justo después de cerrar
+  // ✅ PREVENTA (ticket previo)
+  const [isSavingPreventa, setIsSavingPreventa] = useState(false);
+  const [preventaInfo, setPreventaInfo] = useState<{ id: number; folio: string } | null>(null);
+
+  const justClosedRef = useRef(false);
   const inputBusquedaRef = useRef<TextInput>(null);
   const router = useRouter();
 
-  // ======= Cargar inventario / promos =======
+  // ======= Categorías (chips) =======
+  const [categorias, setCategorias] = useState<CategoriaItem[]>([{ id: 0, nombre: 'Todas' }]);
+  const [categoriaId, setCategoriaId] = useState<number>(0);
+  const [loadingCats, setLoadingCats] = useState(false);
+
+  // ======= Precio por cliente =======
   const priceForClient = (p: any) => Number(p?.precio_cliente ?? p?.precio ?? 0);
   const priceOfInventoryItemForClient = (invItem: any) =>
     Number(invItem?.producto?.precio_cliente ?? invItem?.producto?.precio ?? 0);
 
+  // ======= Validación bloqueo /me =======
+  const fetchMe = useCallback(async (): Promise<MeResponse | null> => {
+    try {
+      const token = await AsyncStorage.getItem('authToken');
+      if (!token) return null;
+
+      const res = await fetch(`${API_BASE_URL}/api/me`, {
+        headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return null;
+
+      const me: MeResponse = await res.json();
+      return me;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const assertVentasPermitidas = useCallback(async (): Promise<boolean> => {
+    const me = await fetchMe();
+    const blocked = Boolean(me?.ventas_bloqueadas);
+
+    if (blocked) {
+      const motivo = String(me?.ventas_bloqueadas_motivo ?? 'Ruta finalizada (pendiente de liberación por administrador)');
+      const cierreId = me?.ventas_bloqueadas_cierre_id ? `\n\nCierre: #${me.ventas_bloqueadas_cierre_id}` : '';
+
+      Alert.alert(
+        'Ventas bloqueadas',
+        `${motivo}${cierreId}\n\nPara vender de nuevo debes solicitarlo al administrador.`,
+        [
+          { text: 'Entendido', style: 'cancel', onPress: () => router.back() },
+        ]
+      );
+      return false;
+    }
+
+    return true;
+  }, [fetchMe, router]);
+
+  // ======= Normalizar cambios para ticket (fallback) =======
+  const normalizeCambiosForTicket = (items: any[]): CambioTicketItem[] => {
+    if (!Array.isArray(items)) return [];
+    return items.map((c: any) => ({
+      producto: String(c?.producto ?? c?.nombre ?? 'Producto'),
+      cantidad: Number(c?.cantidad ?? 0),
+      motivo: c?.motivo ? String(c.motivo) : undefined,
+      lote: c?.lote ?? null,
+      fecha_caducidad: c?.fecha_caducidad ?? null,
+      sustituciones: Array.isArray(c?.sustituciones)
+        ? c.sustituciones.map((s: any) => ({
+            producto: String(s?.producto ?? s?.nombre ?? 'Producto'),
+            cantidad: Number(s?.cantidad ?? 0),
+            lote: s?.lote ?? null,
+            fecha_caducidad: s?.fecha_caducidad ?? null,
+          }))
+        : [],
+    }));
+  };
+
+  // ======= Fetch inventario / promos =======
   const fetchInventario = async () => {
     const token = await AsyncStorage.getItem('authToken');
     try {
@@ -98,8 +202,10 @@ export default function IniciarVenta() {
           headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
         }),
       ]);
+
       const invData = await invRes.json();
       const promoData = await promoRes.json();
+
       setProductos(Array.isArray(invData) ? invData : []);
       setPromociones(Array.isArray(promoData?.promociones) ? promoData.promociones : []);
     } catch (error) {
@@ -111,11 +217,59 @@ export default function IniciarVenta() {
     }
   };
 
-  useEffect(() => { fetchInventario(); }, []);
+  const fetchCategorias = async () => {
+    const token = await AsyncStorage.getItem('authToken');
+    try {
+      setLoadingCats(true);
+      const res = await fetch(`${API_BASE_URL}/api/categorias?solo_con_inventario=1`, {
+        headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      setCategorias(Array.isArray(data) ? data : [{ id: 0, nombre: 'Todas' }]);
+    } catch (e) {
+      console.error('Error categorias:', e);
+      setCategorias([{ id: 0, nombre: 'Todas' }]);
+    } finally {
+      setLoadingCats(false);
+    }
+  };
+
+  // ✅ FIX: useFocusEffect en lugar de useEffect para que el inventario
+  // se recargue siempre al entrar, y el estado se limpie entre ventas.
+  // Antes: al hacer una segunda venta seguida, el carrito/pagos de la
+  // venta anterior podían quedar en memoria.
+  useFocusEffect(
+    useCallback(() => {
+      (async () => {
+        const ok = await assertVentasPermitidas();
+        if (!ok) return;
+
+        // ✅ Si NO es un resume de borrador, limpiar estado residual
+        if (resume !== '1' && !justClosedRef.current) {
+          setCarrito([]);
+          setCambiosVenta([]);
+          setCambiosTicket([]);
+          setRechazosIds([]);
+          setObservaciones('');
+          setNotaPago('');
+          setVenceStr('');
+          setEsCredito(false);
+          setPagoEfectivo('');
+          setPagoTransfer('');
+          setPagoTarjeta('');
+          setClientTxId(newClientTxId());
+        }
+
+        fetchInventario();
+        fetchCategorias();
+      })();
+    }, [resume])
+  );
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
     fetchInventario();
+    fetchCategorias();
   }, []);
 
   const getPrecioProducto = (prodId: number) => {
@@ -123,19 +277,15 @@ export default function IniciarVenta() {
     return priceOfInventoryItemForClient(inv);
   };
 
-  // ======= Borrador: crear / reanudar (robusto) =======
+  // ======= Borrador: crear / reanudar =======
   useEffect(() => {
     (async () => {
-      // 1) Params → fija id
       const idFromParams =
         (cliente_id ? Number(cliente_id) : undefined) ??
         (clienteSeleccionado?.id ?? undefined);
 
-      if (idFromParams && idFromParams > 0) {
-        setClienteId(idFromParams);
-      }
+      if (idFromParams && idFromParams > 0) setClienteId(idFromParams);
 
-      // 2) Reanudar
       if (resume === '1') {
         const draft = await getDraft();
         if (draft) {
@@ -143,6 +293,8 @@ export default function IniciarVenta() {
           setCarrito(draft.carrito || []);
           setObservaciones(draft.observaciones || '');
           setCambiosVenta(draft.cambiosVenta || []);
+          setCambiosTicket(draft.cambiosTicket || []);
+          setRechazosIds(draft.rechazosIds || []);
           if (draft.client_tx_id) setClientTxId(draft.client_tx_id);
           if (typeof draft.es_credito === 'boolean') setEsCredito(draft.es_credito);
           if (draft.pagos) {
@@ -157,13 +309,14 @@ export default function IniciarVenta() {
         return;
       }
 
-      // 3) Crear borrador SOLO si hay cliente válido
       if (idFromParams && idFromParams > 0) {
         await setDraft({
           cliente: { id: idFromParams, nombre: clienteSeleccionado?.nombre ?? '' },
           carrito: [],
           observaciones: '',
           cambiosVenta: [],
+          cambiosTicket: [],
+          rechazosIds: [],
           startedAt: new Date().toISOString(),
           client_tx_id: clientTxId,
           es_credito: esCredito,
@@ -177,11 +330,21 @@ export default function IniciarVenta() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // filtros
-  const productosFiltrados = useMemo(
-    () => productos.filter((i) => (i.producto?.nombre || '').toLowerCase().includes(busqueda.toLowerCase())),
-    [productos, busqueda]
-  );
+  // ======= filtros =======
+  const productosFiltrados = useMemo(() => {
+    const q = busqueda.toLowerCase().trim();
+
+    return productos.filter((i) => {
+      const nombre = (i.producto?.nombre || '').toLowerCase();
+      const matchBusqueda = q === '' ? true : nombre.includes(q);
+
+      if (categoriaId === 0) return matchBusqueda;
+
+      const catId = Number(i.producto?.categoria?.id || 0);
+      return matchBusqueda && catId === categoriaId;
+    });
+  }, [productos, busqueda, categoriaId]);
+
   const promocionesFiltradas = useMemo(
     () => promociones.filter((i) => (i.nombre || '').toLowerCase().includes(busqueda.toLowerCase())),
     [promociones, busqueda]
@@ -189,7 +352,7 @@ export default function IniciarVenta() {
 
   const totalProductosCount = carrito.reduce((acc, p) => acc + (Number(p.cantidad) || 0), 0);
 
-  // totales
+  // ======= totales =======
   const subtotalProductos = carrito
     .filter((p) => p.producto_id && p.producto)
     .reduce((acc, p) => acc + Number(p.cantidad) * Number(priceForClient(p.producto)), 0);
@@ -210,31 +373,33 @@ export default function IniciarVenta() {
 
   const totalVenta = subtotalProductos + subtotalPromos;
 
-  // ======= Pagos =======
+  // ======= Pagos + Crédito confirmado =======
   const num = (s: string) => (s === '' ? 0 : Number(s));
-  const pagosSuma = num(pagoEfectivo) + num(pagoTransfer) + num(pagoTarjeta); // permite anticipo
-  const restante = Math.max(0, Number((totalVenta - pagosSuma).toFixed(2)));
+  const pagosSuma = num(pagoEfectivo) + num(pagoTransfer) + num(pagoTarjeta);
+  const saldoPendiente = Math.max(0, Number((totalVenta - pagosSuma).toFixed(2)));
   const excedente = Math.max(0, Number((pagosSuma - totalVenta).toFixed(2)));
 
-  const esCreditoEfectivo = esCredito || restante > 0.5;
+  const esCreditoConfirmado = esCredito;
 
-  const pagosValidos = esCreditoEfectivo
+  const pagosValidos = esCreditoConfirmado
     ? pagosSuma <= totalVenta + 0.5
     : Math.abs(totalVenta - pagosSuma) <= 0.5;
 
-  // Prefill de VENCE = hoy + 7 cuando es crédito (total o parcial)
+  const requiereConfirmarCredito = saldoPendiente > 0.5 && !esCreditoConfirmado;
+
+  // Prefill vence cuando es crédito confirmado
   useEffect(() => {
-    if (esCreditoEfectivo) {
+    if (esCreditoConfirmado) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(venceStr || '')) {
         setVenceStr(toYMD(addDays(new Date(), 7)));
       }
     } else {
-      if (restante <= 0.5) setVenceStr('');
+      if (saldoPendiente <= 0.5) setVenceStr('');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [esCreditoEfectivo]);
+  }, [esCreditoConfirmado]);
 
-  // Autosave robusto (no guarda vacío y respeta justClosedRef)
+  // ======= Autosave borrador =======
   useEffect(() => {
     (async () => {
       if (justClosedRef.current) return;
@@ -264,6 +429,8 @@ export default function IniciarVenta() {
         carrito,
         observaciones,
         cambiosVenta,
+        cambiosTicket,
+        rechazosIds,
         startedAt: new Date().toISOString(),
         client_tx_id: clientTxId,
         es_credito: esCredito,
@@ -274,12 +441,17 @@ export default function IniciarVenta() {
       });
     })();
   }, [
-    clienteId, carrito, observaciones, cambiosVenta, esCredito,
-    pagoEfectivo, pagoTransfer, pagoTarjeta, clientTxId, notaPago,
+    clienteId, carrito, observaciones, cambiosVenta, cambiosTicket, rechazosIds,
+    esCredito, pagoEfectivo, pagoTransfer, pagoTarjeta, clientTxId, notaPago,
     venceStr, subtotalProductos, subtotalPromos
   ]);
 
-  // === Carrito: + / - / set cantidad directa ===
+  useEffect(() => {
+    if (preventaInfo) setPreventaInfo(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [carrito, observaciones, esCreditoConfirmado, pagoEfectivo, pagoTransfer, pagoTarjeta, notaPago, venceStr]);
+
+  // ======= Carrito =======
   const agregarProducto = (producto: any) => {
     if (producto.isPromo) {
       setCarrito((prev) => {
@@ -393,27 +565,37 @@ export default function IniciarVenta() {
     }
   };
 
-  // Ayudita para “metodo_pago” para el Ticket
+  // ======= Metodo pago para ticket =======
   const metodoPagoForTicket = () => {
     const arr = [
       { k: 'efectivo', v: num(pagoEfectivo) },
       { k: 'transferencia', v: num(pagoTransfer) },
       { k: 'tarjeta', v: num(pagoTarjeta) },
     ].filter(x => x.v > 0);
-    if (esCreditoEfectivo && arr.length === 0) return 'crédito';
+
+    if (esCreditoConfirmado && arr.length === 0) return 'crédito';
     if (arr.length === 0) return 'efectivo';
     if (arr.length === 1) return arr[0].k;
     return 'mixto';
   };
 
-  // ======= Guardar (POST) con idempotencia =======
-  const confirmarVenta = async () => {
-    if (isSaving) return;
+  // ======= POST venta =======
+  const confirmarVenta = async (rechazosToSend: number[] = []) => {
+    // ✅ validación anti bypass (por si quedó en esta pantalla)
+    const ok = await assertVentasPermitidas();
+    if (!ok) return null;
+
+    if (isSaving) return null;
     setIsSaving(true);
 
     try {
       if (!clienteId || clienteId <= 0) {
-        Toast.show({ type: 'error', text1: 'Venta sin cliente', text2: 'No se encontró el cliente de la venta.' });
+        Toast.show({
+          type: 'error',
+          position: 'top',
+          text1: 'Venta sin cliente',
+          text2: 'No se encontró el cliente de la venta.',
+        });
         return null;
       }
 
@@ -437,25 +619,25 @@ export default function IniciarVenta() {
         }));
 
       const pagosPayload = [
-        { metodo: 'efectivo',      monto: Number(pagoEfectivo || 0) },
+        { metodo: 'efectivo', monto: Number(pagoEfectivo || 0) },
         { metodo: 'transferencia', monto: Number(pagoTransfer || 0) },
-        { metodo: 'tarjeta',       monto: Number(pagoTarjeta || 0) },
+        { metodo: 'tarjeta', monto: Number(pagoTarjeta || 0) },
       ].filter((x) => x.monto > 0);
 
       const body: any = {
-        cliente_id: clienteId,               // 👈 usar state confiable
+        cliente_id: clienteId,
         observaciones,
         productos: productosPayload,
         promociones: promocionesPayload,
-        es_credito: esCreditoEfectivo,
+        es_credito: esCreditoConfirmado,
         pagos: pagosPayload,
         client_tx_id: clientTxId,
+        rechazos_ids: rechazosToSend,
+        preventa_id: preventaInfo?.id ?? null,
       };
+
       if (/^\d{4}-\d{2}-\d{2}$/.test(venceStr)) body.fecha_vencimiento = venceStr;
       if (notaPago.trim() !== '') body.nota_pago = notaPago.trim();
-
-      // Depuración opcional
-      // console.log('[POST venta] clienteId=', clienteId, 'carrito.len=', carrito.length);
 
       const response = await fetch(`${API_BASE_URL}/api/venta`, {
         method: 'POST',
@@ -470,101 +652,187 @@ export default function IniciarVenta() {
       const data = await response.json();
 
       if (!response.ok) {
-        Toast.show({ type: 'error', text1: 'Error al guardar venta', text2: data?.message || 'Ocurrió un error' });
+        Toast.show({
+          type: 'error',
+          position: 'top',
+          text1: 'Error al guardar venta',
+          text2: data?.message || 'Ocurrió un error',
+        });
         return null;
       }
 
       if (data?.warning) {
-        Toast.show({ type: 'info', text1: 'Aviso de crédito', text2: String(data.warning) });
+        Toast.show({
+          type: 'info',
+          position: 'top',
+          text1: 'Aviso',
+          text2: String(data.warning),
+        });
       }
 
       return {
         venta_id: data?.venta_id,
         total: Number(data?.total ?? totalVenta),
-        pagado: Number(data?.pagado ?? (totalVenta - restante)),
-        saldo_pendiente: Number(data?.saldo_pendiente ?? Math.max(0, totalVenta - (totalVenta - restante))),
-        estado: String(data?.estado ?? (esCreditoEfectivo ? 'credito' : 'pagada')),
+        pagado: Number(data?.pagado ?? pagosSuma),
+        saldo_pendiente: Number(data?.saldo_pendiente ?? saldoPendiente),
+        estado: String(data?.estado ?? (esCreditoConfirmado ? 'credito' : 'pagada')),
       };
     } catch (e: any) {
-      Toast.show({ type: 'error', text1: 'Fallo de red', text2: String(e?.message || e) });
+      Toast.show({
+        type: 'error',
+        position: 'top',
+        text1: 'Fallo de red',
+        text2: String(e?.message || e),
+      });
       return null;
     } finally {
       setIsSaving(false);
     }
   };
 
-  const finalizarVenta = async () => {
-  const result = await confirmarVenta();
-  if (!result) return;
+  // ======= POST preventa (ticket previo) =======
+  const crearPreventa = async () => {
+    // ✅ también aplica bloqueo aquí
+    const ok = await assertVentasPermitidas();
+    if (!ok) return;
 
-  // 🔒 BLOQUEAR autosave ANTES de limpiar estados
-  justClosedRef.current = true;
+    if (isSavingPreventa) return;
 
-  // 🧹 LIMPIAR borrador del storage
-  await clearDraft();
+    try {
+      setIsSavingPreventa(true);
 
-  // 🔄 RESET completo de TODOS los estados
-  setCarrito([]);
-  setCambiosVenta([]);
-  setObservaciones('');
-  setNotaPago('');
-  setVenceStr('');
-  setEsCredito(false);
-  setPagoEfectivo('');
-  setPagoTransfer('');
-  setPagoTarjeta('');
-  setModalVisible(false);
-
-  // 🆕 Nuevo ID para siguiente venta
-  setClientTxId(newClientTxId());
-
-  // 🔄 Refrescar inventario
-  fetchInventario();
-
-  const carritoConCategoria = carrito.map(item => {
-  // Si es un producto normal (no promoción), asegurar que tenga categoría
-  if (item.producto_id && item.producto) {
-    return {
-      ...item,
-      producto: {
-        ...item.producto,
-        // Asegurarse de que categoría esté presente
-        // (debería venir desde el inventario si actualizaste el controller)
-        categoria: item.producto.categoria || null
+      if (!clienteId || clienteId <= 0) {
+        Alert.alert('Preventa', 'No se encontró el cliente.');
+        return;
       }
-    };
-  }
-  // Si es promoción, devolver tal cual
-  return item;
-});
 
-  // 📄 Navegar al ticket
-  
-router.push({
-  pathname: '/ticket',
-  params: {
-    cliente: JSON.stringify(clienteSeleccionado),
-    productos: JSON.stringify(carritoConCategoria), // 🆕 Usar carrito con categoría
-    cambios: JSON.stringify(cambiosVenta),
-    total: String(result.total.toFixed(2)),
-    observaciones,
-    fecha: new Date().toISOString(),
-    metodo_pago: metodoPagoForTicket(),
-    es_credito: String(esCreditoEfectivo),
-    estado: result.estado,
-    total_pagado: String(result.pagado ?? 0),
-    saldo_pendiente: String(result.saldo_pendiente ?? 0),
-    fecha_vencimiento: venceStr || '',
-    nota_pago: notaPago || '',
-    cliente_id: String(clienteId ?? ''),
-  },
-});
+      const token = await AsyncStorage.getItem('authToken');
 
-  // ⏳ Desbloquear autosave después de navegar (con delay seguro)
-  setTimeout(() => {
-    justClosedRef.current = false;
-  }, 1000); // ⚠️ Aumentado a 1 segundo para mayor seguridad
-};
+      const productosPayload = carrito
+        .filter((p) => p.producto_id && p.cantidad > 0)
+        .map((p) => ({
+          producto_id: p.producto_id,
+          cantidad: Number(p.cantidad),
+        }));
+
+      const promocionesPayload = carrito
+        .filter((p) => p.promocion_id && p.cantidad > 0)
+        .map((p) => ({
+          promocion_id: p.promocion_id,
+          cantidad: Number(p.cantidad),
+        }));
+
+      const pagosPayload = [
+        { metodo: 'efectivo', monto: Number(pagoEfectivo || 0) },
+        { metodo: 'transferencia', monto: Number(pagoTransfer || 0), referencia: notaPago?.trim() ? notaPago.trim() : null },
+        { metodo: 'tarjeta', monto: Number(pagoTarjeta || 0) },
+      ].filter((x) => x.monto > 0);
+
+      const body: any = {
+        cliente_id: clienteId,
+        observaciones,
+        productos: productosPayload,
+        promociones: promocionesPayload,
+        es_credito: esCreditoConfirmado,
+        pagos: pagosPayload,
+        rechazos_ids: rechazosIds ?? [],
+        client_tx_id: `pv-${newClientTxId()}`,
+      };
+
+      if (/^\d{4}-\d{2}-\d{2}$/.test(venceStr)) body.fecha_vencimiento = venceStr;
+
+      const response = await fetch(`${API_BASE_URL}/api/preventas`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(body),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        Alert.alert('Error al crear ticket previo', data?.message || 'Ocurrió un error');
+        return;
+      }
+
+      setPreventaInfo({ id: Number(data.preventa_id), folio: String(data.folio) });
+
+      Toast.show({
+        type: 'success',
+        position: 'top',
+        text1: 'Ticket previo generado',
+        text2: String(data.folio),
+      });
+    } catch (e: any) {
+      Alert.alert('Error', String(e?.message || e));
+    } finally {
+      setIsSavingPreventa(false);
+    }
+  };
+
+  const finalizarVenta = async (cambiosParaTicket: CambioTicketItem[] = [], rechazos: number[] = []) => {
+    const result = await confirmarVenta(rechazos);
+    if (!result) return;
+
+    justClosedRef.current = true;
+    await clearDraft();
+
+    const carritoConCategoria = carrito.map(item => {
+      if (item.producto_id && item.producto) {
+        return {
+          ...item,
+          producto: { ...item.producto, categoria: item.producto.categoria || null },
+        };
+      }
+      return item;
+    });
+
+    // reset
+    setCarrito([]);
+    setCambiosVenta([]);
+    setCambiosTicket([]);
+    setRechazosIds([]);
+    setObservaciones('');
+    setNotaPago('');
+    setVenceStr('');
+    setEsCredito(false);
+    setPagoEfectivo('');
+    setPagoTransfer('');
+    setPagoTarjeta('');
+    setModalVisible(false);
+    setModalCambiosVisible(false);
+
+    setClientTxId(newClientTxId());
+    fetchInventario();
+
+    router.push({
+      pathname: '/ticket',
+      params: {
+        cliente: JSON.stringify(clienteSeleccionado),
+        productos: JSON.stringify(carritoConCategoria),
+        cambios: JSON.stringify(cambiosParaTicket || []),
+        rechazos_ids: JSON.stringify(rechazos || []),
+        total: String(Number(result.total ?? totalVenta).toFixed(2)),
+        observaciones,
+        fecha: new Date().toISOString(),
+        metodo_pago: metodoPagoForTicket(),
+        es_credito: String(esCreditoConfirmado),
+        estado: result.estado,
+        total_pagado: String(result.pagado ?? pagosSuma),
+        saldo_pendiente: String(result.saldo_pendiente ?? saldoPendiente),
+        fecha_vencimiento: venceStr || '',
+        nota_pago: notaPago || '',
+        cliente_id: String(clienteId ?? ''),
+      },
+    });
+
+    setTimeout(() => {
+      justClosedRef.current = false;
+    }, 1000);
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -572,6 +840,7 @@ router.push({
         Venta para: {clienteSeleccionado?.nombre || (clienteId ? `#${clienteId}` : '')}
       </Text>
 
+      {/* Busqueda */}
       <View style={styles.searchWrap}>
         <Ionicons name="search" size={18} color="#6B7280" />
         <TextInput
@@ -590,11 +859,59 @@ router.push({
         )}
       </View>
 
+      {/* Chips categorías */}
+      <View style={styles.chipsWrap}>
+        <FlatList
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          data={categorias}
+          keyExtractor={(c) => String(c.id)}
+          contentContainerStyle={{ gap: 8, paddingRight: 6 }}
+          renderItem={({ item: c }) => {
+            const active = categoriaId === c.id;
+            return (
+              <TouchableOpacity
+                onPress={() => setCategoriaId(c.id)}
+                style={[
+                  styles.chip,
+                  active && { backgroundColor: Colors.light.primario, borderColor: Colors.light.primario },
+                ]}
+              >
+                <Text style={[styles.chipText, active && { color: '#fff' }]}>
+                  {c.nombre}
+                </Text>
+
+                {typeof c.productos_count === 'number' && c.id !== 0 && (
+                  <View style={[styles.chipBadge, active && { backgroundColor: 'rgba(255,255,255,0.25)' }]}>
+                    <Text style={[styles.chipBadgeText, active && { color: '#fff' }]}>
+                      {c.productos_count}
+                    </Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            );
+          }}
+          ListFooterComponent={
+            loadingCats ? (
+              <View style={{ paddingHorizontal: 8, justifyContent: 'center' }}>
+                <Text style={{ color: '#6B7280', fontWeight: '700' }}>Cargando…</Text>
+              </View>
+            ) : null
+          }
+        />
+      </View>
+
+      {/* Lista */}
       <FlatList
         data={[...promocionesFiltradas.map((p) => ({ ...p, isPromo: true })), ...productosFiltrados]}
         keyExtractor={(item: any, index) => (item?.isPromo ? `promo-${item.id}` : `inv-${item?.producto_id ?? index}`)}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[Colors.light.primario]} tintColor={Colors.light.primario} />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={[Colors.light.primario]}
+            tintColor={Colors.light.primario}
+          />
         }
         renderItem={({ item }: any) => {
           const cantidadActual = item.isPromo
@@ -628,7 +945,9 @@ router.push({
           if (item.isPromo) {
             return (
               <View style={[styles.card, { borderLeftColor: Colors.light.primario, borderLeftWidth: 4 }]}>
-                <Text style={[styles.nombre, { color: 'purple' }]} numberOfLines={2}>🔥 Promoción: {item.nombre}</Text>
+                <Text style={[styles.nombre, { color: 'purple' }]} numberOfLines={2}>
+                  🔥 Promoción: {item.nombre}
+                </Text>
                 {!!item.descripcion && <Text style={styles.small}>📋 {item.descripcion}</Text>}
                 <Text style={styles.small}>💰 Precio Promo: {money(item.precio)}</Text>
                 <Text style={styles.small}>🕒 {item.fecha_inicio} a {item.fecha_fin}</Text>
@@ -646,9 +965,15 @@ router.push({
               {item.producto?.imagen_url && (
                 <Image source={{ uri: item.producto.imagen_url }} style={styles.imagen} resizeMode="contain" />
               )}
+
               <Text style={styles.nombre} numberOfLines={2}>
                 <Ionicons name="pricetag-outline" /> {item.producto?.nombre}
               </Text>
+
+              {!!item.producto?.categoria?.nombre && (
+                <Text style={styles.catLine}>🏷️ {item.producto.categoria.nombre}</Text>
+              )}
+
               <Text style={styles.small}><Ionicons name="cube-outline" /> Cantidad: {item.cantidad}</Text>
               <Text style={styles.small}><Ionicons name="calendar-outline" /> Caduca: {item.fecha_caducidad || 'N/D'}</Text>
               <Text style={styles.small}><Ionicons name="cash-outline" /> Precio: {money(priceOfInventoryItemForClient(item))}</Text>
@@ -659,7 +984,7 @@ router.push({
         contentContainerStyle={{ paddingBottom: 120 }}
       />
 
-      {/* Abrir carrito y guardar borrador */}
+      {/* Botón carrito */}
       <TouchableOpacity
         style={styles.carritoBtn}
         onPress={async () => {
@@ -669,6 +994,8 @@ router.push({
             carrito,
             observaciones,
             cambiosVenta,
+            cambiosTicket,
+            rechazosIds,
             startedAt: new Date().toISOString(),
             client_tx_id: clientTxId,
             es_credito: esCredito,
@@ -683,205 +1010,137 @@ router.push({
         {totalProductosCount > 0 && <Text style={styles.badge}>{totalProductosCount}</Text>}
       </TouchableOpacity>
 
-      {/* Modal: Resumen + pagos */}
-      <Modal animationType="slide" transparent visible={modalVisible} onRequestClose={() => setModalVisible(false)}>
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalOverlay}>
-          <View style={styles.modalContainer}>
-            <Text style={styles.sheetTitle}>🧾 Resumen de venta</Text>
-
-            <ScrollView contentContainerStyle={{ paddingBottom: 16 }}>
-              {carrito.length === 0 ? (
-                <Text>No hay productos aún.</Text>
-              ) : (
-                <View>
-                  {carrito.map((p, index) => {
-                    if (p.producto_id && p.producto) {
-                      return (
-                        <View key={`prod-${index}`} style={{ marginBottom: 6 }}>
-                          <Text numberOfLines={2}>
-                            {p.producto.nombre} x {p.cantidad} = {money(p.cantidad * Number(priceForClient(p.producto)))}
-                          </Text>
-                          <Text style={styles.metaSmall}>
-                            Lote: {p.lote || 'N/D'} · Caduca: {p.fecha_caducidad || 'N/D'}
-                          </Text>
-                        </View>
-                      );
+      {/* Modal resumén */}
+      <ResumenVentaModal
+        visible={modalVisible}
+        onClose={() => setModalVisible(false)}
+        carrito={carrito}
+        money={money}
+        priceForClient={priceForClient}
+        subtotalProductos={subtotalProductos}
+        subtotalPromos={subtotalPromos}
+        ahorroPromos={ahorroPromos}
+        totalVenta={totalVenta}
+        observaciones={observaciones}
+        setObservaciones={setObservaciones}
+        pagoEfectivo={pagoEfectivo}
+        setPagoEfectivo={setPagoEfectivo}
+        pagoTransfer={pagoTransfer}
+        setPagoTransfer={setPagoTransfer}
+        pagoTarjeta={pagoTarjeta}
+        setPagoTarjeta={setPagoTarjeta}
+        notaPago={notaPago}
+        setNotaPago={setNotaPago}
+        venceStr={venceStr}
+        setVenceStr={setVenceStr}
+        showPicker={showPicker}
+        setShowPicker={setShowPicker}
+        addDays={addDays}
+        toYMD={toYMD}
+        esCreditoConfirmado={esCreditoConfirmado}
+        onToggleCredito={() => {
+          if (!esCreditoConfirmado) {
+            Alert.alert(
+              'Confirmar venta a crédito',
+              'Esta venta quedará con saldo pendiente. ¿Deseas continuar como crédito?',
+              [
+                { text: 'No', style: 'cancel' },
+                {
+                  text: 'Sí, a crédito',
+                  onPress: () => {
+                    setEsCredito(true);
+                    if (!/^\d{4}-\d{2}-\d{2}$/.test(venceStr || '')) {
+                      setVenceStr(toYMD(addDays(new Date(), 7)));
                     }
-                    if (p.promocion_id) {
-                      return (
-                        <View key={`promo-${index}`} style={{ marginBottom: 6 }}>
-                          <Text style={{ fontWeight: 'bold', color: Colors.light.primario }} numberOfLines={2}>
-                            🎁 {p.nombre_promocion || 'Promoción'} x {p.cantidad} = {money(p.cantidad * Number(p.precio_promocion))}
-                          </Text>
-                          {p.productos?.map((sp: any, j: number) => (
-                            <Text key={j} style={styles.metaSmall}>
-                              • {sp.nombre} (x{(sp?.pivot?.cantidad ?? 1) * p.cantidad})
-                            </Text>
-                          ))}
-                        </View>
-                      );
-                    }
-                    return null;
-                  })}
-
-                  <View style={{ marginTop: 12 }}>
-                    <Text style={{ fontWeight: 'bold' }}>Subtotal productos: {money(subtotalProductos)}</Text>
-                    <Text style={{ fontWeight: 'bold' }}>Subtotal promociones: {money(subtotalPromos)}</Text>
-                    <Text style={{ fontWeight: 'bold', color: 'green' }}>Ahorro por promociones: -{money(ahorroPromos)}</Text>
-                    <Text style={{ marginTop: 6, fontWeight: 'bold', color: Colors.light.primario }}>
-                      Total: {money(totalVenta)}
-                    </Text>
-                  </View>
-                </View>
-              )}
-
-              <TextInput
-                style={[styles.input, { marginTop: 16 }]}
-                placeholder="Observaciones (opcional)"
-                value={observaciones}
-                onChangeText={setObservaciones}
-              />
-
-              {/* MÉTODOS DE PAGO */}
-              <View style={styles.payBox}>
-                <View style={styles.payHeader}>
-                  <Text style={styles.payTitle}>Método(s) de pago</Text>
-                  <TouchableOpacity
-                    onPress={() => { setEsCredito(!esCredito); }}
-                    style={[styles.creditChip, (esCreditoEfectivo && { backgroundColor: '#FEE2E2', borderColor: '#FECACA' }) as any]}
-                  >
-                    <Ionicons name="time-outline" size={14} color={esCreditoEfectivo ? '#991B1B' : '#374151'} />
-                    <Text style={[styles.creditChipText, esCreditoEfectivo && { color: '#991B1B' }]}>
-                      {esCreditoEfectivo ? 'Venta a crédito' : 'Contado'}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-
-                <View className="payRow" style={styles.payRow}>
-                  <Text style={styles.payLabel}>Efectivo</Text>
-                  <TextInput style={styles.payInput} placeholder="$0.00" keyboardType="decimal-pad" value={pagoEfectivo} onChangeText={setPagoEfectivo} />
-                </View>
-                <View style={styles.payRow}>
-                  <Text style={styles.payLabel}>Transferencia</Text>
-                  <TextInput style={styles.payInput} placeholder="$0.00" keyboardType="decimal-pad" value={pagoTransfer} onChangeText={setPagoTransfer} />
-                </View>
-                <View style={styles.payRow}>
-                  <Text style={styles.payLabel}>Tarjeta</Text>
-                  <TextInput style={styles.payInput} placeholder="$0.00" keyboardType="decimal-pad" value={pagoTarjeta} onChangeText={setPagoTarjeta} />
-                </View>
-
-                {/* referencia y vencimiento */}
-                <View style={styles.payRow}>
-                  <Text style={styles.payLabel}>Referencia</Text>
-                  <TextInput style={styles.payInput} placeholder="(opcional)" value={notaPago} onChangeText={setNotaPago} />
-                </View>
-
-                <View style={styles.payRow}>
-                  <Text style={styles.payLabel}>Vence</Text>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                    <TextInput style={[styles.payInput, { width: 130 }]} placeholder="YYYY-MM-DD" value={venceStr} onChangeText={setVenceStr} />
-                    {DateTimePicker && (
-                      <TouchableOpacity onPress={() => setShowPicker(true)}>
-                        <Ionicons name="calendar-outline" size={22} color={Colors.light.primario} />
-                      </TouchableOpacity>
-                    )}
-                  </View>
-                </View>
-
-                {showPicker && DateTimePicker && (
-                  <DateTimePicker
-                    value={/^\d{4}-\d{2}-\d{2}$/.test(venceStr) ? new Date(venceStr) : addDays(new Date(), 7)}
-                    mode="date"
-                    display={Platform.OS === 'ios' ? 'inline' : 'default'}
-                    onChange={(_, date) => { setShowPicker(Platform.OS === 'ios'); if (date) setVenceStr(toYMD(date)); }}
-                  />
-                )}
-
-                <View style={styles.paySummary}>
-                  <Text style={styles.paySumText}>Pagado: {money(pagosSuma)}</Text>
-                  {excedente > 0 && (<Text style={[styles.paySumText, { color: '#991B1B' }]}>Excedente: {money(excedente)}</Text>)}
-                  {!(esCreditoEfectivo) ? (
-                    restante > 0
-                      ? <Text style={[styles.paySumText, { color: '#B45309' }]}>Restante: {money(restante)}</Text>
-                      : <Text style={[styles.paySumText, { color: '#065F46' }]}>Listo para cerrar</Text>
-                  ) : (
-                    <Text style={styles.paySumText}>Saldo: {money(Math.max(0, totalVenta - pagosSuma))}</Text>
-                  )}
-                </View>
-              </View>
-            </ScrollView>
-
-            <TouchableOpacity
-              style={[styles.confirmarBtn, (carrito.length === 0 || !pagosValidos || isSaving) && { opacity: 0.5 }]}
-              onPress={() => {
-                if (!pagosValidos) {
-                  Alert.alert(
-                    'Revisa los pagos',
-                    esCreditoEfectivo
-                      ? 'En crédito, el anticipo no puede exceder el total.'
-                      : 'En contado, la suma debe cubrir el total.'
-                  );
-                  return;
-                }
-                Alert.alert(
-                  '¿Recibiste producto en cambio?',
-                  'El cliente devolvió productos por caducidad o no vendidos.',
-                  [
-                    { text: 'NO', onPress: async () => { await finalizarVenta(); }, style: 'cancel' },
-                    {
-                      text: 'SÍ',
-                      onPress: () => {
-                        setCambiosVenta([]);
-                        setModalCambiosVisible(true);
-                        setModalVisible(false);
-                      },
-                    },
-                  ]
-                );
-              }}
-              disabled={carrito.length === 0 || !pagosValidos || isSaving}
-            >
-              <Text style={styles.confirmarText}>{isSaving ? 'Guardando…' : 'Confirmar Venta'}</Text>
-            </TouchableOpacity>
-
-            {/* Descartar venta completa */}
-            <TouchableOpacity
-              style={[styles.cancelarBtn, { marginTop: 8 }]}
-              onPress={() =>
-                Alert.alert('Cancelar venta', '¿Deseas descartar esta venta?', [
-                  { text: 'No', style: 'cancel' },
-                  {
-                    text: 'Sí, descartar',
-                    style: 'destructive',
-                    onPress: async () => { await clearDraft(); router.back(); },
                   },
-                ])
-              }
-            >
-              <Text style={styles.cancelarText}>Descartar venta</Text>
-            </TouchableOpacity>
+                },
+              ]
+            );
+          } else {
+            setEsCredito(false);
+            setVenceStr('');
+          }
+        }}
+        pagosSuma={pagosSuma}
+        saldoPendiente={saldoPendiente}
+        excedente={excedente}
+        requiereConfirmarCredito={requiereConfirmarCredito}
+        pagosValidos={pagosValidos}
+        isSaving={isSaving}
+        onConfirmar={() => {
+          Alert.alert(
+            '¿Recibiste producto en cambio?',
+            'El cliente devolvió productos por caducidad o no vendidos.',
+            [
+              {
+                text: 'NO',
+                onPress: async () => {
+                  setCambiosTicket([]);
+                  setRechazosIds([]);
+                  await finalizarVenta([], []);
+                },
+                style: 'cancel'
+              },
+              {
+                text: 'SÍ',
+                onPress: () => {
+                  setCambiosVenta([]);
+                  setCambiosTicket([]);
+                  setRechazosIds([]);
+                  setModalCambiosVisible(true);
+                  setModalVisible(false);
+                },
+              },
+            ]
+          );
+        }}
+        onDescartar={() =>
+          Alert.alert('Cancelar venta', '¿Deseas descartar esta venta?', [
+            { text: 'No', style: 'cancel' },
+            {
+              text: 'Sí, descartar',
+              style: 'destructive',
+              onPress: async () => { await clearDraft(); router.back(); },
+            },
+          ])
+        }
+        onCrearPreventa={crearPreventa}
+        preventaInfo={preventaInfo}
+        isSavingPreventa={isSavingPreventa}
+        onVerTicketPrevio={() => {
+          if (!preventaInfo?.id) return;
+          router.push({
+            pathname: '/TicketPrevio',
+            params: { preventa_id: String(preventaInfo.id) },
+          });
+        }}
+      />
 
-            {/* Cerrar solo el modal */}
-            <TouchableOpacity style={[styles.cancelarBtn, { marginTop: 8, backgroundColor: '#EEE' }]} onPress={() => setModalVisible(false)}>
-              <Text style={[styles.cancelarText, { color: '#111827' }]}>Cerrar</Text>
-            </TouchableOpacity>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
-
+      {/* Modal de cambios */}
       <CambiosModal
         visible={modalCambiosVisible}
         productos={productos}
         cambiosVenta={cambiosVenta}
         setCambiosVenta={setCambiosVenta}
-        onConfirmar={async () => {
-          await finalizarVenta();
+        onConfirmar={async (res?: CambiosSaveResult) => {
+          const ticketItems = (res?.ticketItems && Array.isArray(res.ticketItems))
+            ? res.ticketItems
+            : normalizeCambiosForTicket(cambiosVenta);
+
+          const ids = (res?.rechazosIds && Array.isArray(res.rechazosIds))
+            ? res.rechazosIds
+            : [];
+
+          setCambiosTicket(ticketItems);
+          setRechazosIds(ids);
+
           setModalCambiosVisible(false);
+          await finalizarVenta(ticketItems, ids);
         }}
         onClose={() => setModalCambiosVisible(false)}
-        finalizarVenta={finalizarVenta}
       />
-      <Toast />
+
+      <Toast topOffset={60} />
     </SafeAreaView>
   );
 }
@@ -897,12 +1156,38 @@ const styles = StyleSheet.create({
   },
   input: { flex: 1, height: 44, color: '#111827' },
 
+  // chips
+  chipsWrap: { marginBottom: 10 },
+  chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  chipText: { fontWeight: '800', fontSize: 12, color: '#111827' },
+  chipBadge: {
+    minWidth: 22,
+    height: 18,
+    paddingHorizontal: 6,
+    borderRadius: 999,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chipBadgeText: { fontSize: 11, fontWeight: '800', color: '#374151' },
+
   card: {
     backgroundColor: '#fff', padding: 12, borderRadius: 12, marginBottom: 10,
     shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 4, elevation: 2
   },
   nombre: { fontWeight: '700', marginBottom: 4, color: '#111827' },
   small: { color: '#374151', marginTop: 2 },
+  catLine: { marginTop: 2, fontWeight: '700', color: '#6B7280' },
 
   qtyRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10 },
   qtyInput: {
@@ -920,30 +1205,4 @@ const styles = StyleSheet.create({
     position: 'absolute', top: -6, right: -6, backgroundColor: 'red', color: '#fff',
     fontSize: 12, borderRadius: 10, paddingHorizontal: 6,
   },
-
-  modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.35)' },
-  modalContainer: { backgroundColor: 'white', padding: 16, borderTopRightRadius: 16, borderTopLeftRadius: 16, elevation: 6, maxHeight: '92%' },
-  sheetTitle: { fontWeight: '800', fontSize: 18, marginBottom: 10, color: Colors.light.primario },
-  metaSmall: { fontSize: 12, color: '#6B7280', marginLeft: 12 },
-
-  confirmarBtn: { marginTop: 12, backgroundColor: Colors.light.primario, padding: 14, borderRadius: 10, alignItems: 'center' },
-  confirmarText: { color: '#fff', fontWeight: '800' },
-
-  cancelarBtn: { marginTop: 8, backgroundColor: '#E5E7EB', padding: 12, borderRadius: 10, alignItems: 'center' },
-  cancelarText: { color: '#111827', fontWeight: '700' },
-
-  payBox: { marginTop: 16, padding: 12, backgroundColor: '#FAFAFA', borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB' },
-  payHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  payTitle: { fontWeight: '800', color: '#111827' },
-  creditChip: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#E5E7EB', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6, borderWidth: 1, borderColor: '#D1D5DB' },
-  creditChipText: { fontWeight: '700', color: '#111827', fontSize: 12 },
-
-  payRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10 },
-  payLabel: { color: '#111827' },
-  payInput: {
-    width: 160, height: 40, backgroundColor: '#fff', borderWidth: 1, borderColor: '#E5E7EB',
-    borderRadius: 8, paddingHorizontal: 10, textAlign: 'right', color: '#111827'
-  },
-  paySummary: { marginTop: 10, gap: 4 },
-  paySumText: { fontWeight: '700' },
 });

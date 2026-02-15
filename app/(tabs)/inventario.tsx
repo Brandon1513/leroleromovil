@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   View,
   Text,
@@ -55,9 +56,14 @@ export default function InventarioScreen() {
     }
   };
 
-  useEffect(() => {
-    fetchInventario();
-  }, []);
+  // ✅ FIX: useFocusEffect recarga cada vez que entras a la pantalla.
+  // Antes con useEffect([], []) el inventario se "congelaba" después
+  // de la primera carga y no refrescaba al volver de otra pantalla.
+  useFocusEffect(
+    useCallback(() => {
+      fetchInventario();
+    }, [])
+  );
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);

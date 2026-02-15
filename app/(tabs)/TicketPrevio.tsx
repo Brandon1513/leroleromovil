@@ -1,27 +1,22 @@
-// app/ticket.tsx - CON RESUMEN POR CATEGORÍAS + CAMBIOS CON SUSTITUCIONES
 import React, { useMemo, useState, useEffect } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  Alert,
-  ActivityIndicator,
+  View, Text, StyleSheet, ScrollView, TouchableOpacity,
+  Alert, ActivityIndicator
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system';
 import { Asset } from 'expo-asset';
 import { Colors } from '@/constants/Colors';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { API_BASE_URL } from '@/constants/Config';
 
-const LOGO_LOCAL = require('../../assets/images/lerolero-logo.png');
+const LOGO_LOCAL = require('../../assets/images/lerolero-logo.png'); // 👈 ajusta si tu ruta difiere
 const REMOTE_LOGO_URL = 'https://lerolerob.domcloud.dev/images/logo.png';
 
-// ---------- Helpers ----------
 const money = (n: number) =>
   new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(Number(n || 0));
 
@@ -39,9 +34,7 @@ async function localAssetToBase64(mod: number) {
   await asset.downloadAsync();
   const uri = asset.localUri;
   if (!uri) throw new Error('No se pudo resolver el asset local');
-  const b64 = await FileSystem.readAsStringAsync(uri, {
-    encoding: FileSystem.EncodingType.Base64,
-  });
+  const b64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
   const ext = asset.type || 'png';
   return `data:image/${ext};base64,${b64}`;
 }
@@ -49,9 +42,7 @@ async function localAssetToBase64(mod: number) {
 async function fetchRemoteLogoToBase64(url: string) {
   const tmp = FileSystem.cacheDirectory + 'logo-remote';
   const dl = await FileSystem.downloadAsync(url, tmp);
-  const b64 = await FileSystem.readAsStringAsync(dl.uri, {
-    encoding: FileSystem.EncodingType.Base64,
-  });
+  const b64 = await FileSystem.readAsStringAsync(dl.uri, { encoding: FileSystem.EncodingType.Base64 });
   const ct = dl.headers['Content-Type'] || dl.headers['content-type'] || '';
   const ext =
     ct.includes('jpeg') || ct.includes('jpg') ? 'jpeg'
@@ -60,36 +51,19 @@ async function fetchRemoteLogoToBase64(url: string) {
   return `data:image/${ext};base64,${b64}`;
 }
 
-// 🆕 Tipo para resumen por categoría
 type ResumenCategoria = {
   categoria: string;
   totalUnidades: number;
   totalMonto: number;
-  productos: Array<{
-    nombre: string;
-    cantidad: number;
-    precio: number;
-  }>;
+  productos: Array<{ nombre: string; cantidad: number; precio: number }>;
 };
 
-export default function Ticket() {
+export default function TicketPrevio() {
   const router = useRouter();
-  const {
-    cliente,
-    productos,
-    total,
-    observaciones,
-    fecha,
-    cambios,
-    metodo_pago,
-    forma_pago,
-    es_credito,
-    estado,
-    total_pagado,
-    saldo_pendiente,
-    fecha_vencimiento,
-    nota_pago,
-  } = useLocalSearchParams();
+  const { preventa_id } = useLocalSearchParams();
+
+  const [loading, setLoading] = useState(true);
+  const [preventa, setPreventa] = useState<any>(null);
 
   const [logoBase64, setLogoBase64] = useState<string | null>(null);
   const [loadingLogo, setLoadingLogo] = useState(true);
@@ -99,13 +73,11 @@ export default function Ticket() {
       try {
         const remote = await fetchRemoteLogoToBase64(REMOTE_LOGO_URL);
         setLogoBase64(remote);
-      } catch (e) {
-        console.warn('Logo remoto falló, uso local. Detalle:', e);
+      } catch {
         try {
           const local = await localAssetToBase64(LOGO_LOCAL);
           setLogoBase64(local);
-        } catch (e2) {
-          console.warn('Logo local también falló, sin logo. Detalle:', e2);
+        } catch {
           setLogoBase64(null);
         }
       } finally {
@@ -114,24 +86,53 @@ export default function Ticket() {
     })();
   }, []);
 
-  if (!cliente || !productos) {
-    return <Text style={styles.error}>Error: No hay información de la venta.</Text>;
-  }
+  useEffect(() => {
+    (async () => {
+      try {
+        const id = Number(preventa_id || 0);
+        if (!id) {
+          Alert.alert('Ticket previo', 'No llegó preventa_id');
+          router.back();
+          return;
+        }
 
-  const clienteObj = useMemo(() => JSON.parse(cliente as string), [cliente]);
-  const productosList = useMemo(() => JSON.parse(productos as string), [productos]);
-  const cambiosList = useMemo(() => (cambios ? JSON.parse(cambios as string) : []), [cambios]);
+        const token = await AsyncStorage.getItem('authToken');
+
+        const res = await fetch(`${API_BASE_URL}/api/preventas/${id}`, {
+          headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+        });
+
+        const json = await res.json();
+        if (!res.ok) {
+          Alert.alert('Error', json?.message || 'No se pudo cargar la preventa');
+          router.back();
+          return;
+        }
+
+        setPreventa(json);
+      } catch (e: any) {
+        Alert.alert('Error', String(e?.message || e));
+        router.back();
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [preventa_id]);
+
+  const clienteObj = preventa?.cliente || { nombre: '' };
+  const productosList = preventa?.productos_ticket || [];
+  const pagos = Array.isArray(preventa?.pagos) ? preventa.pagos : [];
 
   const fechaFormateada = useMemo(() => {
-    const d = new Date(String(fecha || new Date().toISOString()));
+    const d = new Date(String(preventa?.created_at || new Date().toISOString()));
     return formatMX(d, true);
-  }, [fecha]);
+  }, [preventa?.created_at]);
 
-  // 🆕 Calcular resumen por categorías
+  // Resumen por categorías (igual que tu ticket.tsx)
   const resumenPorCategoria = useMemo(() => {
     const mapa = new Map<string, ResumenCategoria>();
 
-    productosList.forEach((p: any) => {
+    (productosList || []).forEach((p: any) => {
       if (p.producto_id && p.producto) {
         const categoria = p.producto.categoria?.nombre || 'Sin categoría';
         const cantidad = Number(p.cantidad || 0);
@@ -139,88 +140,73 @@ export default function Ticket() {
         const monto = cantidad * precio;
 
         if (!mapa.has(categoria)) {
-          mapa.set(categoria, {
-            categoria,
-            totalUnidades: 0,
-            totalMonto: 0,
-            productos: [],
-          });
+          mapa.set(categoria, { categoria, totalUnidades: 0, totalMonto: 0, productos: [] });
         }
 
         const cat = mapa.get(categoria)!;
         cat.totalUnidades += cantidad;
         cat.totalMonto += monto;
-        cat.productos.push({
-          nombre: p.producto.nombre,
-          cantidad,
-          precio,
-        });
+        cat.productos.push({ nombre: p.producto.nombre, cantidad, precio });
       }
     });
 
-    return Array.from(mapa.values()).sort((a, b) =>
-      a.categoria.localeCompare(b.categoria)
-    );
+    return Array.from(mapa.values()).sort((a, b) => a.categoria.localeCompare(b.categoria));
   }, [productosList]);
 
-  // ---------- Totales ----------
   const subtotalProductos = useMemo(
     () =>
-      productosList
+      (productosList || [])
         .filter((p: any) => p.producto_id && p.producto)
-        .reduce((acc: number, p: any) => acc + p.cantidad * Number(p.producto?.precio || 0), 0),
+        .reduce((acc: number, p: any) => acc + Number(p.cantidad || 0) * Number(p.producto?.precio || 0), 0),
     [productosList]
   );
 
   const subtotalPromos = useMemo(
     () =>
-      productosList
+      (productosList || [])
         .filter((p: any) => p.promocion_id)
-        .reduce((acc: number, p: any) => acc + p.cantidad * Number(p.precio_promocion || 0), 0),
+        .reduce((acc: number, p: any) => acc + Number(p.cantidad || 0) * Number(p.precio_promocion || 0), 0),
     [productosList]
   );
 
   const ahorroPromos = useMemo(
     () =>
-      productosList
+      (productosList || [])
         .filter((p: any) => p.promocion_id)
         .reduce((acc: number, p: any) => {
           const precioNormalPack = (p.productos || []).reduce(
             (s: number, sp: any) => s + Number(sp.precio || 0) * Number(sp?.pivot?.cantidad || 1),
             0
           );
-          return acc + p.cantidad * Math.max(precioNormalPack - Number(p.precio_promocion || 0), 0);
+          return acc + Number(p.cantidad || 0) * Math.max(precioNormalPack - Number(p.precio_promocion || 0), 0);
         }, 0),
     [productosList]
   );
 
-  const totalCalculado = useMemo(
-    () => subtotalProductos + subtotalPromos,
-    [subtotalProductos, subtotalPromos]
-  );
+  const totalCalculado = subtotalProductos + subtotalPromos;
 
-  // ---------- Pago / Estado ----------
-  const rawMetodo = String(metodo_pago || forma_pago || (es_credito ? 'crédito' : 'efectivo') || '')
-    .toLowerCase();
+  const metodoPagoNice = useMemo(() => {
+    // inferimos método por pagos (igual que tu lógica)
+    const arr = pagos.filter((p: any) => Number(p?.monto || 0) > 0);
+    if ((preventa?.es_credito || false) && arr.length === 0) return 'Crédito';
+    if (arr.length === 0) return 'Efectivo';
+    if (arr.length === 1) {
+      const k = String(arr[0]?.metodo || '').toLowerCase();
+      if (k === 'tarjeta') return 'Tarjeta';
+      if (k === 'transferencia') return 'Transferencia';
+      return 'Efectivo';
+    }
+    return 'Pago mixto';
+  }, [pagos, preventa?.es_credito]);
 
-  const metodoNice =
-    rawMetodo === 'tarjeta'
-      ? 'Tarjeta'
-      : rawMetodo === 'transferencia'
-      ? 'Transferencia'
-      : rawMetodo === 'mixto'
-      ? 'Pago mixto'
-      : rawMetodo === 'crédito' || rawMetodo === 'credito'
-      ? 'Crédito'
-      : 'Efectivo';
+  const estadoLower = String(preventa?.status || '').toLowerCase();
+  const pagado = Number(preventa?.total_pagado || 0);
+  const saldo = Number(preventa?.saldo_pendiente || 0);
+  const esCreditoFlag = Boolean(preventa?.es_credito);
 
-  const estadoLower = String(estado || '').toLowerCase();
-  const esCreditoFlag = String(es_credito || '').toLowerCase() === 'true' || es_credito === '1';
-
-  const pagado = Number(total_pagado || 0);
-  const saldo = Number(saldo_pendiente || 0);
-
-  const venceStr = fecha_vencimiento ? formatMX(new Date(String(fecha_vencimiento)), false) : null;
+  const venceStr = preventa?.fecha_vencimiento
+    ? formatMX(new Date(String(preventa.fecha_vencimiento)), false)
+    : null;
 
   const isPagada = estadoLower === 'pagada' || saldo <= 0.01;
   const isCreditoActiva = estadoLower === 'credito' || (esCreditoFlag && saldo > 0.01);
@@ -232,17 +218,18 @@ export default function Ticket() {
     estadoTxt = `Crédito — resta ${money(saldo)}`;
   } else if (estadoLower === 'parcial') {
     estadoTxt = `Parcial — resta ${money(saldo)}`;
+  } else if (estadoLower === 'impresa') {
+    estadoTxt = 'Impresa (Preventa)';
   }
 
-  // ---------- HTML ----------
   const generarHTML = () => {
-    const resumenProductos = productosList
+    const resumenProductos = (productosList || [])
       .map((p: any) => {
         if (p.producto_id && p.producto) {
           return `
             <div style="margin-bottom:6px">
               <div><strong>${p.producto.nombre}</strong> x ${p.cantidad} = ${money(
-                p.cantidad * Number(p.producto.precio || 0)
+                Number(p.cantidad || 0) * Number(p.producto.precio || 0)
               )}</div>
               <div style="font-size:10px; margin-left:12px; color:#444">
                 Lote: ${p.lote || 'N/D'} - Caduca: ${p.fecha_caducidad || 'N/D'}
@@ -250,24 +237,27 @@ export default function Ticket() {
             </div>
           `;
         }
+
         if (p.promocion_id) {
           const sub = (p.productos || [])
             .map(
               (sp: any) => `
                 <div style="font-size:10px; margin-left:12px;">
-                  • ${sp.nombre} (x${(sp?.pivot?.cantidad ?? 1) * p.cantidad})
+                  • ${sp.nombre} (x${(sp?.pivot?.cantidad ?? 1) * Number(p.cantidad || 0)})
                 </div>`
             )
             .join('');
+
           return `
             <div style="margin-bottom:6px">
-              <div><strong>🎁 ${p.nombre_promocion || 'Promoción'}</strong> x ${
-            p.cantidad
-          } = ${money(p.cantidad * Number(p.precio_promocion || 0))}</div>
+              <div><strong>🎁 ${p.nombre_promocion || 'Promoción'}</strong> x ${p.cantidad} = ${money(
+                Number(p.cantidad || 0) * Number(p.precio_promocion || 0)
+              )}</div>
               ${sub}
             </div>
           `;
         }
+
         return '';
       })
       .join('');
@@ -284,46 +274,6 @@ export default function Ticket() {
         </div>
       `)
       .join('');
-
-    const resumenCambios =
-      cambiosList.length > 0
-        ? cambiosList
-            .map((c: any) => {
-              const devName = c?.producto || c?.nombre || 'Producto';
-              const devuelto = `
-                <div style="margin-bottom:6px">
-                  <div><strong>${devName}</strong> x ${c.cantidad} - Motivo: ${c.motivo || 'N/D'}</div>
-                  <div style="font-size:10px; margin-left:12px; color:#444">
-                    Lote: ${c.lote || 'N/D'} - Caduca: ${c.fecha_caducidad || 'N/D'}
-                  </div>
-                </div>
-              `;
-
-              const entregado =
-                Array.isArray(c.sustituciones) && c.sustituciones.length > 0
-                  ? `
-                    <div style="margin-left:12px; margin-top:6px; margin-bottom:8px;">
-                      <div style="font-weight:bold; font-size:12px;">✅ Producto entregado (sustitución):</div>
-                      ${(c.sustituciones || [])
-                        .map(
-                          (s: any) => `
-                            <div style="font-size:10px; margin-left:12px; margin-top:2px;">
-                              • ${(s?.producto || s?.nombre || 'Producto')} x ${s.cantidad}
-                              <div style="margin-left:12px; color:#444;">
-                                Lote: ${s.lote || 'N/D'} - Caduca: ${s.fecha_caducidad || 'N/D'}
-                              </div>
-                            </div>
-                          `
-                        )
-                        .join('')}
-                    </div>
-                  `
-                  : '';
-
-              return devuelto + entregado;
-            })
-            .join('')
-        : '';
 
     const css = `
       @page { size: 72mm auto; margin: 0; }
@@ -348,35 +298,28 @@ export default function Ticket() {
               ${logoBase64 ? `<img class="logo" src="${logoBase64}" width="120" />` : ''}
               <div class="bold">Dulces Lero Lero</div>
               <div class="line"></div>
-              <div class="bold">🧾 Ticket de Venta</div>
+              <div class="bold">🧾 Ticket Previo (Preventa)</div>
             </div>
 
             <div class="section">
-              <div><strong>Cliente:</strong> ${clienteObj.nombre}</div>
+              <div><strong>Folio:</strong> ${preventa?.folio || `PV-${preventa?.id || ''}`}</div>
+              <div><strong>Cliente:</strong> ${clienteObj?.nombre || ''}</div>
               <div><strong>Fecha:</strong> ${fechaFormateada}</div>
-              <div><strong>Observaciones:</strong> ${observaciones || 'Sin observaciones'}</div>
+              <div><strong>Observaciones:</strong> ${preventa?.observaciones || 'Sin observaciones'}</div>
             </div>
 
             <div class="section">
-              <div><strong>Método de pago:</strong> ${metodoNice}</div>
+              <div><strong>Método de pago:</strong> ${metodoPagoNice}</div>
               <div><strong>Estado:</strong> ${estadoTxt}${(venceStr && isCreditoActiva) ? ` (Vence: ${venceStr})` : ''}</div>
-              ${(esCreditoFlag || estadoLower === 'parcial')
+              ${(esCreditoFlag)
                 ? `<div><strong>Pagado:</strong> ${money(pagado)} · <strong>Saldo:</strong> ${money(saldo)}</div>`
                 : ''
               }
-              ${nota_pago ? `<div><strong>Referencia:</strong> ${nota_pago}</div>` : ''}
+              ${preventa?.nota_pago ? `<div><strong>Referencia:</strong> ${String(preventa.nota_pago)}</div>` : ''}
             </div>
 
             <div class="line"></div>
             <div class="section"><div><strong>Productos:</strong></div>${resumenProductos}</div>
-
-            ${cambiosList.length
-              ? `<div class="line"></div>
-                 <div class="section">
-                   <div><strong>♻️ Cambios (devuelto / entregado):</strong></div>
-                   ${resumenCambios}
-                 </div>`
-              : ''}
 
             <div class="line"></div>
             <div class="section">
@@ -393,7 +336,7 @@ export default function Ticket() {
 
             <div class="line"></div>
             <div class="center bold">Total: ${money(totalCalculado)}</div>
-            <div class="center" style="margin-top:6px;">¡Gracias por tu compra!</div>
+            <div class="center" style="margin-top:6px;">(Preventa) ¡Gracias!</div>
           </div>
         </body>
       </html>
@@ -419,12 +362,35 @@ export default function Ticket() {
     }
   };
 
+  if (loading) {
+    return (
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+        <ActivityIndicator size="large" color={Colors.light.primario} />
+        <Text style={{ marginTop: 10 }}>Cargando ticket previo…</Text>
+      </View>
+    );
+  }
+
+  if (!preventa) {
+    return (
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+        <Text>No hay información de la preventa.</Text>
+        <TouchableOpacity onPress={() => router.back()} style={{ marginTop: 10 }}>
+          <Text style={{ color: Colors.light.primario, fontWeight: '800' }}>Volver</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
   return (
     <SafeAreaView style={{ flex: 1 }}>
       <ScrollView contentContainerStyle={styles.container}>
-        <Text style={styles.title}>🧾 Ticket de Venta</Text>
+        <Text style={styles.title}>🧾 Ticket Previo (Preventa)</Text>
 
         <View style={styles.section}>
+          <Text style={styles.label}><Ionicons name="barcode" /> Folio:</Text>
+          <Text>{preventa?.folio || `PV-${preventa?.id || ''}`}</Text>
+
           <Text style={styles.label}><Ionicons name="person" /> Cliente:</Text>
           <Text>{clienteObj?.nombre ?? ''}</Text>
 
@@ -432,67 +398,71 @@ export default function Ticket() {
           <Text>{fechaFormateada}</Text>
 
           <Text style={styles.label}><Ionicons name="chatbox" /> Observaciones:</Text>
-          <Text>{(observaciones as string) || 'Sin observaciones'}</Text>
+          <Text>{preventa?.observaciones || 'Sin observaciones'}</Text>
 
           <Text style={styles.label}><Ionicons name="card" /> Método de pago:</Text>
-          <Text>{metodoNice}</Text>
+          <Text>{metodoPagoNice}</Text>
 
           <Text style={styles.label}><Ionicons name="information-circle" /> Estado:</Text>
           <Text>
             {estadoTxt}{(venceStr && isCreditoActiva) ? ` · Vence: ${venceStr}` : ''}
           </Text>
 
-          {(String(es_credito || '').toLowerCase() === 'true' || estadoLower === 'parcial') && (
+          {esCreditoFlag && (
             <>
               <Text style={styles.label}><Ionicons name="cash" /> Montos:</Text>
-              <Text>Pagado: {money(Number(total_pagado || 0))} · Saldo: {money(Number(saldo_pendiente || 0))}</Text>
+              <Text>Pagado: {money(pagado)} · Saldo: {money(saldo)}</Text>
             </>
           )}
 
-          {nota_pago ? (
+          {!!preventa?.nota_pago && (
             <>
               <Text style={styles.label}><Ionicons name="pricetag" /> Referencia:</Text>
-              <Text>{String(nota_pago)}</Text>
+              <Text>{String(preventa.nota_pago)}</Text>
             </>
-          ) : null}
+          )}
         </View>
 
         <View style={styles.section}>
           <Text style={styles.label}>🧂 Productos</Text>
-          {productosList.map((p: any, i: number) => {
-            if (p.producto_id && p.producto) {
-              return (
-                <View key={`prod-${i}`} style={{ marginBottom: 8 }}>
-                  <Text>
-                    {p.producto.nombre} x {p.cantidad} = {money(p.cantidad * Number(p.producto.precio || 0))}
-                  </Text>
-                  <Text style={{ fontSize: 12, color: '#555', marginLeft: 12 }}>
-                    Lote: {p.lote || 'N/D'} - Caduca: {p.fecha_caducidad || 'N/D'}
-                  </Text>
-                </View>
-              );
-            }
 
-            if (p.promocion_id) {
-              return (
-                <View key={`promo-${i}`} style={{ marginBottom: 10 }}>
-                  <Text style={{ fontWeight: 'bold', color: Colors.light.primario }}>
-                    🎁 {p.nombre_promocion || 'Promoción'} x {p.cantidad} = {money(p.cantidad * Number(p.precio_promocion || 0))}
-                  </Text>
-                  {p.productos?.map((sp: any, j: number) => (
-                    <Text key={j} style={{ fontSize: 12, marginLeft: 12 }}>
-                      • {sp.nombre} (x{(sp?.pivot?.cantidad ?? 1) * p.cantidad})
+          {(productosList || []).length === 0 ? (
+            <Text style={{ color: '#6B7280' }}>Sin productos.</Text>
+          ) : (
+            productosList.map((p: any, i: number) => {
+              if (p.producto_id && p.producto) {
+                return (
+                  <View key={`prod-${i}`} style={{ marginBottom: 8 }}>
+                    <Text>
+                      {p.producto.nombre} x {p.cantidad} = {money(Number(p.cantidad || 0) * Number(p.producto.precio || 0))}
                     </Text>
-                  ))}
-                </View>
-              );
-            }
+                    <Text style={{ fontSize: 12, color: '#555', marginLeft: 12 }}>
+                      Lote: {p.lote || 'N/D'} - Caduca: {p.fecha_caducidad || 'N/D'}
+                    </Text>
+                  </View>
+                );
+              }
 
-            return null;
-          })}
+              if (p.promocion_id) {
+                return (
+                  <View key={`promo-${i}`} style={{ marginBottom: 10 }}>
+                    <Text style={{ fontWeight: 'bold', color: Colors.light.primario }}>
+                      🎁 {p.nombre_promocion || 'Promoción'} x {p.cantidad} = {money(Number(p.cantidad || 0) * Number(p.precio_promocion || 0))}
+                    </Text>
+                    {p.productos?.map((sp: any, j: number) => (
+                      <Text key={j} style={{ fontSize: 12, marginLeft: 12 }}>
+                        • {sp.nombre} (x{(sp?.pivot?.cantidad ?? 1) * Number(p.cantidad || 0)})
+                      </Text>
+                    ))}
+                  </View>
+                );
+              }
+
+              return null;
+            })
+          )}
         </View>
 
-        {/* RESUMEN POR CATEGORÍAS */}
         {resumenPorCategoria.length > 0 && (
           <View style={styles.section}>
             <Text style={styles.label}>📊 Resumen por Categoría</Text>
@@ -512,51 +482,11 @@ export default function Ticket() {
           </View>
         )}
 
-        {/* CAMBIOS: DEVUELTO + ENTREGADO */}
-        {cambiosList.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.label}>♻️ Cambios (devuelto / entregado)</Text>
-
-            {cambiosList.map((c: any, i: number) => (
-              <View key={`cambio-${i}`} style={{ marginBottom: 12 }}>
-                <Text style={{ fontWeight: '700' }}>
-                  {(c.producto || c.nombre || 'Producto')} x {c.cantidad} - Motivo: {c.motivo || 'N/D'}
-                </Text>
-
-                <Text style={{ fontSize: 12, color: '#555', marginLeft: 12 }}>
-                  Lote: {c.lote || 'N/D'} - Caduca: {c.fecha_caducidad || 'N/D'}
-                </Text>
-
-                {Array.isArray(c.sustituciones) && c.sustituciones.length > 0 && (
-                  <View style={{ marginTop: 8, marginLeft: 12 }}>
-                    <Text style={{ fontWeight: '700', color: Colors.light.primario }}>
-                      ✅ Producto entregado (sustitución)
-                    </Text>
-
-                    {c.sustituciones.map((s: any, j: number) => (
-                      <View key={`sust-${i}-${j}`} style={{ marginTop: 6 }}>
-                        <Text style={{ fontSize: 13 }}>
-                          • {(s.producto || s.nombre || 'Producto')} x {s.cantidad}
-                        </Text>
-                        <Text style={{ fontSize: 12, color: '#555', marginLeft: 12 }}>
-                          Lote: {s.lote || 'N/D'} - Caduca: {s.fecha_caducidad || 'N/D'}
-                        </Text>
-                      </View>
-                    ))}
-                  </View>
-                )}
-              </View>
-            ))}
-          </View>
-        )}
-
         <View style={styles.section}>
           <Text style={styles.label}>Totales</Text>
           <Text>Subtotal productos: {money(subtotalProductos)}</Text>
           <Text>Subtotal promociones: {money(subtotalPromos)}</Text>
-          <Text style={{ color: 'green' }}>
-            Ahorro por promociones: -{money(ahorroPromos)}
-          </Text>
+          <Text style={{ color: 'green' }}>Ahorro por promociones: -{money(ahorroPromos)}</Text>
         </View>
 
         <View style={styles.totalContainer}>
@@ -587,9 +517,9 @@ export default function Ticket() {
           <Text style={styles.btnGhostText}>{loadingLogo ? 'Preparando PDF…' : 'Compartir Ticket PDF'}</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.btnDone} onPress={() => router.replace('/(tabs)')}>
-          <Ionicons name="checkmark-done-outline" size={20} color="#fff" />
-          <Text style={styles.btnDoneText}>Terminar venta</Text>
+        <TouchableOpacity style={styles.btnDone} onPress={() => router.back()}>
+          <Ionicons name="arrow-back-outline" size={20} color="#fff" />
+          <Text style={styles.btnDoneText}>Volver</Text>
         </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
@@ -598,20 +528,8 @@ export default function Ticket() {
 
 const styles = StyleSheet.create({
   container: { padding: 20, backgroundColor: '#f2f2f2' },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: Colors.light.primario,
-    marginBottom: 16,
-    textAlign: 'center',
-  },
-  section: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-    elevation: 2,
-  },
+  title: { fontSize: 24, fontWeight: 'bold', color: Colors.light.primario, marginBottom: 16, textAlign: 'center' },
+  section: { backgroundColor: '#fff', borderRadius: 12, padding: 16, marginBottom: 16, elevation: 2 },
   label: { fontWeight: 'bold', marginTop: 8, marginBottom: 2 },
 
   categoriaCard: {
@@ -623,22 +541,10 @@ const styles = StyleSheet.create({
     borderLeftColor: Colors.light.primario,
   },
   categoriaHeader: { marginBottom: 6 },
-  categoriaNombre: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#2C3E50',
-  },
-  categoriaInfo: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
+  categoriaNombre: { fontSize: 16, fontWeight: '700', color: '#2C3E50' },
+  categoriaInfo: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   categoriaUnidades: { fontSize: 14, color: '#555' },
-  categoriaMonto: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: Colors.light.primario,
-  },
+  categoriaMonto: { fontSize: 15, fontWeight: '600', color: Colors.light.primario },
 
   totalContainer: { alignItems: 'flex-end', marginBottom: 16 },
   totalText: { fontSize: 18, fontWeight: 'bold', color: Colors.light.primario },
@@ -680,6 +586,4 @@ const styles = StyleSheet.create({
     marginBottom: 24,
   },
   btnDoneText: { color: '#fff', fontWeight: 'bold' },
-
-  error: { marginTop: 40, textAlign: 'center', color: 'red' },
 });

@@ -114,6 +114,13 @@ export default function TabsLayout() {
             href: null, // 👈 esto lo oculta de la barra de pestañas
           }}
         />
+        <Tabs.Screen
+        name="TicketPrevio"
+        options={{
+          href: null,          // <-- lo oculta del tab bar
+          title: 'TicketPrevio',
+        }}
+      />
        
       </Tabs>
       <Toast />

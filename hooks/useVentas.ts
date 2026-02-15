@@ -1,4 +1,8 @@
 // hooks/useVentas.ts
+// ✅ FIX: Sin cambios estructurales aquí — los cambios se cargan
+// directamente en SaleModal al abrir cada venta (lazy loading).
+// Solo se asegura que la API incluya los campos necesarios.
+
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE_URL } from '@/constants/Config';
@@ -8,7 +12,6 @@ export function useVentas(clienteId?: number) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  // filtros
   const [fechaInicio, setFechaInicio] = useState<Date | null>(null);
   const [fechaFin, setFechaFin] = useState<Date | null>(null);
   const [producto, setProducto] = useState('');
@@ -22,6 +25,9 @@ export function useVentas(clienteId?: number) {
       });
       const data = await res.json();
       setVentas(Array.isArray(data) ? data : []);
+    } catch (e) {
+      console.error('Error al cargar ventas:', e);
+      setVentas([]);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -66,11 +72,18 @@ export function useVentas(clienteId?: number) {
     return { totalVentas, suma, avg };
   }, [aplicarFiltros]);
 
-  const limpiarFiltros = () => { setFechaInicio(null); setFechaFin(null); setProducto(''); };
+  const limpiarFiltros = () => {
+    setFechaInicio(null);
+    setFechaFin(null);
+    setProducto('');
+  };
+
   const rangoRapido = (dias: number) => {
-    const fin = new Date(); const ini = new Date();
+    const fin = new Date();
+    const ini = new Date();
     ini.setDate(fin.getDate() - (dias - 1));
-    setFechaInicio(ini); setFechaFin(fin);
+    setFechaInicio(ini);
+    setFechaFin(fin);
   };
 
   return {

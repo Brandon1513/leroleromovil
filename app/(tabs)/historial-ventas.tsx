@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   View,
   Text,
@@ -36,6 +37,15 @@ export default function HistorialVentas() {
 
   // logo base64 (solo para PDF en el modal)
   const [logoBase64, setLogoBase64] = useState<string | null>(null);
+
+  // ✅ FIX: recargar ventas cada vez que entras a esta pantalla.
+  // Antes el historial mostraba datos viejos al navegar hacia atrás
+  // y volver a abrir el historial de un cliente.
+  useFocusEffect(
+    useCallback(() => {
+      onRefresh();
+    }, [onRefresh])
+  );
   useEffect(() => {
     (async () => {
       try {
