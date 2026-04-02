@@ -109,6 +109,7 @@ export default function IniciarVenta() {
 
   // idempotencia
   const [isSaving, setIsSaving] = useState(false);
+  const [ventaIdParaCambios, setVentaIdParaCambios] = useState<number | null>(null); // ✅ venta_id para rechazos
   const [clientTxId, setClientTxId] = useState<string>(newClientTxId());
 
   // ✅ PREVENTA (ticket previo)
@@ -713,6 +714,8 @@ export default function IniciarVenta() {
         .map((p) => ({
           producto_id: p.producto_id,
           cantidad: Number(p.cantidad),
+          lote: p.lote ?? null,                         // ✅ agregar lote
+          fecha_caducidad: p.fecha_caducidad ?? null,   // ✅ agregar caducidad
         }));
 
       const promocionesPayload = carrito
@@ -832,6 +835,58 @@ export default function IniciarVenta() {
     setTimeout(() => {
       justClosedRef.current = false;
     }, 1000);
+  };
+
+
+  // ✅ Navegar al ticket cuando ya hubo cambios registrados (venta ya creada)
+  const navegarAlTicketConCambios = async (ticketItems: CambioTicketItem[], ids: number[]) => {
+    justClosedRef.current = true;
+    await clearDraft();
+
+    const carritoConCategoria = carrito.map(item => {
+      if (item.producto_id && item.producto) {
+        return { ...item, producto: { ...item.producto, categoria: item.producto.categoria || null } };
+      }
+      return item;
+    });
+
+    setCarrito([]);
+    setCambiosVenta([]);
+    setCambiosTicket([]);
+    setRechazosIds([]);
+    setObservaciones('');
+    setNotaPago('');
+    setVenceStr('');
+    setEsCredito(false);
+    setPagoEfectivo('');
+    setPagoTransfer('');
+    setPagoTarjeta('');
+    setModalVisible(false);
+    setClientTxId(newClientTxId());
+    fetchInventario();
+
+    router.push({
+      pathname: '/ticket',
+      params: {
+        cliente: JSON.stringify(clienteSeleccionado),
+        productos: JSON.stringify(carritoConCategoria),
+        cambios: JSON.stringify(ticketItems || []),
+        rechazos_ids: JSON.stringify(ids || []),
+        total: String(Number(totalVenta).toFixed(2)),
+        observaciones,
+        fecha: new Date().toISOString(),
+        metodo_pago: metodoPagoForTicket(),
+        es_credito: String(esCreditoConfirmado),
+        estado: esCreditoConfirmado ? 'credito' : 'pagada',
+        total_pagado: String(pagosSuma),
+        saldo_pendiente: String(saldoPendiente),
+        fecha_vencimiento: venceStr || '',
+        nota_pago: notaPago || '',
+        cliente_id: String(clienteId ?? ''),
+      },
+    });
+
+    setTimeout(() => { justClosedRef.current = false; }, 1000);
   };
 
   return (
@@ -1083,7 +1138,13 @@ export default function IniciarVenta() {
               },
               {
                 text: 'SÍ',
-                onPress: () => {
+                onPress: async () => {
+                  // ✅ Crear la venta PRIMERO para obtener el venta_id
+                  // Los rechazos se registran después en el CambiosModal con ese id
+                  const result = await confirmarVenta([]);
+                  if (!result) return; // si falló la venta, no abrir modal
+
+                  setVentaIdParaCambios(result.venta_id ?? null); // guardar venta_id
                   setCambiosVenta([]);
                   setCambiosTicket([]);
                   setRechazosIds([]);
@@ -1122,7 +1183,10 @@ export default function IniciarVenta() {
         productos={productos}
         cambiosVenta={cambiosVenta}
         setCambiosVenta={setCambiosVenta}
+        ventaId={ventaIdParaCambios}
         onConfirmar={async (res?: CambiosSaveResult) => {
+          // ✅ La venta ya fue creada antes de abrir este modal
+          // Solo navegamos al ticket con los cambios registrados
           const ticketItems = (res?.ticketItems && Array.isArray(res.ticketItems))
             ? res.ticketItems
             : normalizeCambiosForTicket(cambiosVenta);
@@ -1133,9 +1197,10 @@ export default function IniciarVenta() {
 
           setCambiosTicket(ticketItems);
           setRechazosIds(ids);
-
           setModalCambiosVisible(false);
-          await finalizarVenta(ticketItems, ids);
+
+          // Navegar al ticket sin crear venta de nuevo
+          await navegarAlTicketConCambios(ticketItems, ids);
         }}
         onClose={() => setModalCambiosVisible(false)}
       />

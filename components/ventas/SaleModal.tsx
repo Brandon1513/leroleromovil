@@ -12,7 +12,7 @@ import { Colors } from '@/constants/Colors';
 import { money } from '@/src/utils/money';
 
 const LOGO_LOCAL      = require('@/assets/images/lerolero-logo.png');
-const REMOTE_LOGO_URL = 'https://lerolerob.domcloud.dev/images/logo.png';
+const REMOTE_LOGO_URL = 'https://leroleroa.domcloud.dev/images/logo.png';
 
 // ─── Helpers ─────────────────────────────────────────────────
 const getVentaDate = (v: any): Date => {
@@ -123,7 +123,7 @@ export default function SaleModal({ visible, venta, onClose, styles }: Props) {
 
   if (!venta) return null;
 
-  const fechaMX   = formatMX(getVentaDate(venta), true);
+  const fechaMX   = formatMX(getVentaDate(venta), false); // solo fecha, sin hora
   const detalles  = venta?.detalles ?? [];
   const cambios   = normalizarCambios(venta);
 
@@ -146,12 +146,17 @@ export default function SaleModal({ visible, venta, onClose, styles }: Props) {
   const venceStr = venta?.fecha_vencimiento
     ? formatMX(getVentaDate({ fecha: venta.fecha_vencimiento }), false) : null;
   const isPagada        = estadoLower === 'pagada' || saldo <= 0.01;
-  const isCreditoActiva = estadoLower === 'credito' || (esCreditoFlag && saldo > 0.01);
+  // parcial = tiene abonos pero aún debe, credito = sin ningún pago aún
+  const isCreditoActiva = estadoLower === 'credito' || estadoLower === 'parcial' || (esCreditoFlag && saldo > 0.01);
 
   let estadoTxt = 'Pendiente';
-  if (isPagada)             estadoTxt = esCreditoFlag ? 'Pagada — crédito liquidado' : 'Pagada';
-  else if (isCreditoActiva) estadoTxt = `Crédito — resta ${money(saldo)}`;
-  else if (estadoLower === 'parcial') estadoTxt = `Parcial — resta ${money(saldo)}`;
+  if (isPagada) {
+    estadoTxt = esCreditoFlag ? 'Pagada — crédito liquidado' : 'Pagada';
+  } else if (estadoLower === 'parcial') {
+    estadoTxt = `Parcial — resta ${money(saldo)} · Abonado: ${money(pagado)}`;
+  } else if (isCreditoActiva) {
+    estadoTxt = `Crédito — resta ${money(saldo)}`;
+  }
 
   const generarHTML = (): string => {
     const logo  = logoRef.current;

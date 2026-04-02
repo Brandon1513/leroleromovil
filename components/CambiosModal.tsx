@@ -10,6 +10,7 @@ import {
   TextInput,
   KeyboardAvoidingView,
   Platform,
+  ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/Colors';
@@ -44,6 +45,7 @@ type Props = {
   setCambiosVenta: (v: any[] | ((prev: any[]) => any[])) => void;
   onConfirmar?: (res?: CambiosSaveResult) => void; // ✅ ahora regresa data al padre
   onClose?: () => void;
+  ventaId?: number | null; // ✅ ID de la venta ya creada para vincular rechazos
 };
 
 export default function CambiosModal({
@@ -53,10 +55,12 @@ export default function CambiosModal({
   setCambiosVenta,
   onConfirmar,
   onClose,
+  ventaId,
 }: Props) {
   const [pickerVisible, setPickerVisible] = useState(false);
   const [buscar, setBuscar] = useState('');
   const [targetCambioKey, setTargetCambioKey] = useState<string | null>(null);
+  const [categoriaActiva, setCategoriaActiva] = useState<string | null>(null);
 
   const inventario = Array.isArray(productos) ? productos : [];
 
@@ -260,17 +264,39 @@ export default function CambiosModal({
     );
   };
 
+  const categorias = useMemo(() => {
+    const cats = new Map<string, string>();
+    inventario.forEach((it: any) => {
+      const cat = it?.producto?.categoria;
+      if (cat?.id && cat?.nombre) cats.set(String(cat.id), cat.nombre);
+    });
+    return Array.from(cats.entries()).map(([id, nombre]) => ({ id, nombre }));
+  }, [inventario]);
+
+  // Filtro para el modal principal (lista de productos a devolver)
+  const inventarioFiltradoPrincipal = useMemo(() => {
+    const q = buscar.trim().toLowerCase();
+    return inventario.filter((it: any) => {
+      const matchBuscar = !q || (getNombre(it) || '').toLowerCase().includes(q);
+      const matchCategoria = !categoriaActiva || String(it?.producto?.categoria?.id) === categoriaActiva;
+      return matchBuscar && matchCategoria;
+    });
+  }, [buscar, categoriaActiva, inventario]);
+
   const pickerData = useMemo(() => {
     const base = inventario.filter((it) => (Number(it?.cantidad) || 0) > 0);
     const q = buscar.trim().toLowerCase();
-    if (!q) return base;
 
     return base.filter((it) => {
-      const nombre = (getNombre(it) || '').toLowerCase();
-      const lote = (it?.lote || '').toLowerCase();
-      return nombre.includes(q) || lote.includes(q) || String(it?.producto_id || '').includes(q);
+      const matchBuscar = !q || (() => {
+        const nombre = (getNombre(it) || '').toLowerCase();
+        const lote = (it?.lote || '').toLowerCase();
+        return nombre.includes(q) || lote.includes(q) || String(it?.producto_id || '').includes(q);
+      })();
+      const matchCategoria = !categoriaActiva || String(it?.producto?.categoria?.id) === categoriaActiva;
+      return matchBuscar && matchCategoria;
     });
-  }, [buscar, inventario]);
+  }, [buscar, categoriaActiva, inventario]);
 
   const RenderPickerItem = ({ item }: any) => {
     const inv_key = invKeyOf(item);
@@ -429,7 +455,7 @@ export default function CambiosModal({
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ cambios: payload }),
+        body: JSON.stringify({ cambios: payload, venta_id: ventaId ?? null }), // ✅ vincular venta
       });
 
       // ✅ intenta leer JSON (si no hay body, no truena)
@@ -605,8 +631,53 @@ export default function CambiosModal({
           <View style={styles.container}>
             <Text style={styles.title}>♻️ Productos en Cambio</Text>
 
+            {/* Buscador */}
+            <View style={[styles.searchBox, { marginBottom: 8 }]}>
+              <Ionicons name="search-outline" size={18} color="#6B7280" />
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Buscar producto..."
+                value={buscar}
+                onChangeText={setBuscar}
+              />
+              {buscar !== '' && (
+                <TouchableOpacity onPress={() => setBuscar('')}>
+                  <Ionicons name="close-circle" size={18} color="#9CA3AF" />
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {/* Chips de categorías */}
+            {categorias.length > 0 && (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={{ marginBottom: 10 }}
+                contentContainerStyle={{ flexDirection: 'row', gap: 8, paddingRight: 8 }}
+              >
+                <TouchableOpacity
+                  style={[styles.catChip, !categoriaActiva && styles.catChipActivo]}
+                  onPress={() => setCategoriaActiva(null)}
+                >
+                  <Text style={[styles.catChipText, !categoriaActiva && styles.catChipTextActivo]}>Todos</Text>
+                </TouchableOpacity>
+                {categorias.map(cat => {
+                  const activo = categoriaActiva === cat.id;
+                  return (
+                    <TouchableOpacity
+                      key={cat.id}
+                      style={[styles.catChip, activo && styles.catChipActivo]}
+                      onPress={() => setCategoriaActiva(activo ? null : cat.id)}
+                    >
+                      <Text style={[styles.catChipText, activo && styles.catChipTextActivo]}>{cat.nombre}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            )}
+
             <FlatList
-              data={inventario}
+              data={inventarioFiltradoPrincipal}
               keyExtractor={(item, index) => changeKeyOf(item) || String(index)}
               renderItem={RenderItem}
               ItemSeparatorComponent={() => <View style={styles.separator} />}
@@ -646,6 +717,34 @@ export default function CambiosModal({
                   onChangeText={setBuscar}
                 />
               </View>
+
+              {categorias.length > 0 && (
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  style={{ marginBottom: 10 }}
+                  contentContainerStyle={{ flexDirection: 'row', gap: 8, paddingRight: 8 }}
+                >
+                  <TouchableOpacity
+                    style={[styles.catChip, !categoriaActiva && styles.catChipActivo]}
+                    onPress={() => setCategoriaActiva(null)}
+                  >
+                    <Text style={[styles.catChipText, !categoriaActiva && styles.catChipTextActivo]}>Todos</Text>
+                  </TouchableOpacity>
+                  {categorias.map(cat => {
+                    const activo = categoriaActiva === cat.id;
+                    return (
+                      <TouchableOpacity
+                        key={cat.id}
+                        style={[styles.catChip, activo && styles.catChipActivo]}
+                        onPress={() => setCategoriaActiva(activo ? null : cat.id)}
+                      >
+                        <Text style={[styles.catChipText, activo && styles.catChipTextActivo]}>{cat.nombre}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              )}
 
               <FlatList
                 data={pickerData}
@@ -838,6 +937,15 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   searchInput: { flex: 1, color: '#111827', fontWeight: '600' },
+  catChip: {
+    paddingHorizontal: 14, paddingVertical: 7, height: 34,
+    borderRadius: 999, backgroundColor: '#F3F4F6',
+    borderWidth: 1, borderColor: '#E5E7EB',
+    flexShrink: 0, justifyContent: 'center', alignItems: 'center', marginBottom: 17,
+    },
+  catChipActivo: { backgroundColor: Colors.light.primario, borderColor: Colors.light.primario },
+  catChipText: { fontSize: 12, fontWeight: '600', color: '#374151' },
+  catChipTextActivo: { color: '#fff' },
   pickRow: {
     padding: 12,
     borderRadius: 12,

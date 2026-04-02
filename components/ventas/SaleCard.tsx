@@ -29,14 +29,11 @@ const getVentaDate = (v: any): Date => {
 };
 
 const formatMX = (d: Date) =>
-  d.toLocaleString('es-MX', {
+  d.toLocaleDateString('es-MX', {
     timeZone: 'America/Mexico_City',
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true,
   });
 
 export default function SaleCard({

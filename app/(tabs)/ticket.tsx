@@ -19,7 +19,7 @@ import { Colors } from '@/constants/Colors';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 const LOGO_LOCAL = require('../../assets/images/lerolero-logo.png');
-const REMOTE_LOGO_URL = 'https://lerolerob.domcloud.dev/images/logo.png';
+const REMOTE_LOGO_URL = 'https://leroleroa.domcloud.dev/images/logo.png';
 
 // ---------- Helpers ----------
 const money = (n: number) =>

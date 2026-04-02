@@ -15,7 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { API_BASE_URL } from '@/constants/Config';
 
 const LOGO_LOCAL = require('../../assets/images/lerolero-logo.png'); // 👈 ajusta si tu ruta difiere
-const REMOTE_LOGO_URL = 'https://lerolerob.domcloud.dev/images/logo.png';
+const REMOTE_LOGO_URL = 'https://leroleroa.domcloud.dev/images/logo.png';
 
 const money = (n: number) =>
   new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(Number(n || 0));

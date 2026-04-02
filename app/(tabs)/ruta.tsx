@@ -202,7 +202,31 @@ export default function RutaOptimizada() {
 
 
       if (Array.isArray(data)) {
-        setClientes(data);
+        // ✅ Ordenar clientes por distancia desde ubicación actual
+        const calcDist = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+          const R = 6371e3;
+          const toRad = (v: number) => (v * Math.PI) / 180;
+          const φ1 = toRad(lat1), φ2 = toRad(lat2);
+          const Δφ = toRad(lat2 - lat1), Δλ = toRad(lon2 - lon1);
+          const a = Math.sin(Δφ/2)**2 + Math.cos(φ1)*Math.cos(φ2)*Math.sin(Δλ/2)**2;
+          return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        };
+
+        const clientesOrdenados = [...data].sort((a: any, b: any) => {
+          const coords = ubicacionActual.coords;
+          const aLat = parseFloat(a.latitud), aLon = parseFloat(a.longitud);
+          const bLat = parseFloat(b.latitud), bLon = parseFloat(b.longitud);
+          const aOk = !isNaN(aLat) && !isNaN(aLon);
+          const bOk = !isNaN(bLat) && !isNaN(bLon);
+          if (!aOk && !bOk) return 0;
+          if (!aOk) return 1;  // sin coordenadas van al final
+          if (!bOk) return -1;
+          const dA = calcDist(coords.latitude, coords.longitude, aLat, aLon);
+          const dB = calcDist(coords.latitude, coords.longitude, bLat, bLon);
+          return dA - dB;
+        });
+
+        setClientes(clientesOrdenados);
 
         // ✅ CORREGIDO: El backend es la fuente de verdad
         const visitadosDelBackend: Record<number, boolean> = {};
@@ -423,7 +447,19 @@ export default function RutaOptimizada() {
     <View style={[styles.card, visitados[item.id] && { opacity: 0.6 }]}>
       <Text style={styles.nombre}>{item.nombre}</Text>
       <Text style={styles.coordenadas}>
-        📍 Lat: {item.latitud || 'N/D'} | Lon: {item.longitud || 'N/D'}
+        {item.latitud && item.longitud && ubicacion
+          ? (() => {
+              const R = 6371e3;
+              const toRad = (v: number) => (v * Math.PI) / 180;
+              const φ1 = toRad(ubicacion.latitude), φ2 = toRad(parseFloat(item.latitud));
+              const Δφ = toRad(parseFloat(item.latitud) - ubicacion.latitude);
+              const Δλ = toRad(parseFloat(item.longitud) - ubicacion.longitude);
+              const a = Math.sin(Δφ/2)**2 + Math.cos(φ1)*Math.cos(φ2)*Math.sin(Δλ/2)**2;
+              const d = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+              return d < 1000 ? `📍 ${d.toFixed(0)} m de distancia` : `📍 ${(d/1000).toFixed(1)} km de distancia`;
+            })()
+          : item.latitud && item.longitud ? '📍 Ubicación registrada' : '📍 Sin ubicación'
+        }
       </Text>
 
       {!visitados[item.id] ? (
@@ -507,6 +543,7 @@ export default function RutaOptimizada() {
             data={clientesFiltrados}
             keyExtractor={(item: any) => item.id.toString()}
             renderItem={renderItem}
+            contentContainerStyle={{ paddingBottom: 24 }}
             refreshControl={
               <RefreshControl
                 refreshing={refreshing}
@@ -709,7 +746,6 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f2f2f2',
     padding: 16,
-    paddingBottom: 40,
   },
   titulo: {
     fontSize: 20,
