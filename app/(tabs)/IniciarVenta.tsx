@@ -107,6 +107,9 @@ export default function IniciarVenta() {
   const [pagoTransfer, setPagoTransfer] = useState<string>('');
   const [pagoTarjeta, setPagoTarjeta] = useState<string>('');
 
+  // dinero entregado para calcular cambio
+  const [dineroEntregado, setDineroEntregado] = useState<string>('');
+
   // idempotencia
   const [isSaving, setIsSaving] = useState(false);
   const [ventaIdParaCambios, setVentaIdParaCambios] = useState<number | null>(null); // ✅ venta_id para rechazos
@@ -277,6 +280,39 @@ export default function IniciarVenta() {
     const inv = productos.find((i) => i.producto?.id === prodId || i.producto_id === prodId);
     return priceOfInventoryItemForClient(inv);
   };
+
+  // ======= Reset completo cuando cambia el cliente =======
+  // Esto es crítico para evitar que el estado anterior contamine la siguiente venta
+  const clienteIdFromParams = cliente_id ? Number(cliente_id) : (clienteSeleccionado?.id ?? null);
+  const prevClienteIdRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const newId = clienteIdFromParams;
+    if (prevClienteIdRef.current !== null && prevClienteIdRef.current !== newId && resume !== '1') {
+      // Cliente cambió — resetear todo
+      justClosedRef.current = true;
+      setCarrito([]);
+      setCambiosVenta([]);
+      setCambiosTicket([]);
+      setRechazosIds([]);
+      setObservaciones('');
+      setNotaPago('');
+      setVenceStr('');
+      setEsCredito(false);
+      setPagoEfectivo('');
+      setPagoTransfer('');
+      setPagoTarjeta('');
+      setModalVisible(false);
+      setModalCambiosVisible(false);
+      setPreventaInfo(null);
+      setVentaIdParaCambios(null);
+      setDineroEntregado('');
+      setClientTxId(newClientTxId());
+      clearDraft();
+      setTimeout(() => { justClosedRef.current = false; }, 500);
+    }
+    prevClienteIdRef.current = newId;
+  }, [clienteIdFromParams]);
 
   // ======= Borrador: crear / reanudar =======
   useEffect(() => {
@@ -626,7 +662,7 @@ export default function IniciarVenta() {
       ].filter((x) => x.monto > 0);
 
       const body: any = {
-        cliente_id: clienteId,
+        cliente_id: clienteIdFromParams ?? clienteId,  // ✅ param como fuente de verdad
         observaciones,
         productos: productosPayload,
         promociones: promocionesPayload,
@@ -732,7 +768,7 @@ export default function IniciarVenta() {
       ].filter((x) => x.monto > 0);
 
       const body: any = {
-        cliente_id: clienteId,
+        cliente_id: clienteIdFromParams ?? clienteId,  // ✅ param como fuente de verdad
         observaciones,
         productos: productosPayload,
         promociones: promocionesPayload,
@@ -807,6 +843,7 @@ export default function IniciarVenta() {
     setPagoTarjeta('');
     setModalVisible(false);
     setModalCambiosVisible(false);
+    setDineroEntregado('');
 
     setClientTxId(newClientTxId());
     fetchInventario();
@@ -829,6 +866,8 @@ export default function IniciarVenta() {
         fecha_vencimiento: venceStr || '',
         nota_pago: notaPago || '',
         cliente_id: String(clienteId ?? ''),
+        dinero_entregado: dineroEntregado || '',
+        cambio: String(Math.max(0, Number(dineroEntregado || 0) - Number(result.total ?? totalVenta)).toFixed(2)),
       },
     });
 
@@ -883,6 +922,8 @@ export default function IniciarVenta() {
         fecha_vencimiento: venceStr || '',
         nota_pago: notaPago || '',
         cliente_id: String(clienteId ?? ''),
+        dinero_entregado: dineroEntregado || '',
+        cambio: String(Math.max(0, Number(dineroEntregado || 0) - totalVenta).toFixed(2)),
       },
     });
 
@@ -1086,6 +1127,8 @@ export default function IniciarVenta() {
         setPagoTarjeta={setPagoTarjeta}
         notaPago={notaPago}
         setNotaPago={setNotaPago}
+        dineroEntregado={dineroEntregado}
+        setDineroEntregado={setDineroEntregado}
         venceStr={venceStr}
         setVenceStr={setVenceStr}
         showPicker={showPicker}
@@ -1172,7 +1215,11 @@ export default function IniciarVenta() {
           if (!preventaInfo?.id) return;
           router.push({
             pathname: '/TicketPrevio',
-            params: { preventa_id: String(preventaInfo.id) },
+            params: {
+              preventa_id: String(preventaInfo.id),
+              dinero_entregado: dineroEntregado || '',
+              cambio: String(Math.max(0, Number(dineroEntregado || 0) - totalVenta).toFixed(2)),
+            },
           });
         }}
       />

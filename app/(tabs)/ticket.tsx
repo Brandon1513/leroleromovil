@@ -89,6 +89,8 @@ export default function Ticket() {
     saldo_pendiente,
     fecha_vencimiento,
     nota_pago,
+    dinero_entregado,
+    cambio,
   } = useLocalSearchParams();
 
   const [logoBase64, setLogoBase64] = useState<string | null>(null);
@@ -364,6 +366,10 @@ export default function Ticket() {
                 ? `<div><strong>Pagado:</strong> ${money(pagado)} · <strong>Saldo:</strong> ${money(saldo)}</div>`
                 : ''
               }
+              ${(dinero_entregado && Number(dinero_entregado) > 0 && !esCreditoFlag) ? `
+                <div><strong>Dinero entregado:</strong> ${money(Number(dinero_entregado))}</div>
+                <div><strong>Cambio:</strong> ${money(Number(cambio || 0))}</div>
+              ` : ''}
               ${nota_pago ? `<div><strong>Referencia:</strong> ${nota_pago}</div>` : ''}
             </div>
 
@@ -446,6 +452,15 @@ export default function Ticket() {
             <>
               <Text style={styles.label}><Ionicons name="cash" /> Montos:</Text>
               <Text>Pagado: {money(Number(total_pagado || 0))} · Saldo: {money(Number(saldo_pendiente || 0))}</Text>
+            </>
+          )}
+
+          {!!dinero_entregado && Number(dinero_entregado) > 0 && !esCreditoFlag && (
+            <>
+              <Text style={styles.label}><Ionicons name="cash" /> Dinero entregado:</Text>
+              <Text>{money(Number(dinero_entregado))}</Text>
+              <Text style={styles.label}><Ionicons name="return-down-back" /> Cambio:</Text>
+              <Text style={{ fontWeight: '700', color: Colors.light.primario }}>{money(Number(cambio || 0))}</Text>
             </>
           )}
 

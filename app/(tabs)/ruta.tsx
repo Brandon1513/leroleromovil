@@ -121,17 +121,24 @@ export default function RutaOptimizada() {
       
 
 
-      // ✅ Si fue liberado (ventas_bloqueadas = false), limpiar el estado local
+      // ✅ Si fue liberado, limpiar TODO el estado local para recargar desde backend
       if (data.fue_liberado === true) {
-        
-        await AsyncStorage.removeItem(STORAGE_KEYS.RUTA_CERRADA);
+        await AsyncStorage.multiRemove([
+          STORAGE_KEYS.RUTA_CERRADA,
+          STORAGE_KEYS.VISITADOS,
+          STORAGE_KEYS.FECHA_ESTADO,
+        ]);
         setBotonDeshabilitado(false);
+        setVisitados({}); // limpiar en memoria también
 
         Toast.show({
           type: 'success',
           text1: '✅ Ruta liberada',
-          text2: 'Ya puedes finalizar ruta nuevamente',
+          text2: 'Recargando clientes del día...',
         });
+
+        // Recargar datos para que el backend sea la fuente de verdad
+        await obtenerDatos();
       }
     } catch (error) {
       console.error('Error al verificar liberación:', error);

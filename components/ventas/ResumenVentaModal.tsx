@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, Modal,
   KeyboardAvoidingView, Platform, ScrollView, Alert
@@ -52,6 +52,8 @@ type Props = {
   saldoPendiente: number;
   excedente: number;
   requiereConfirmarCredito: boolean;
+  dineroEntregado: string;
+  setDineroEntregado: (v: string) => void;
 
   pagosValidos: boolean;
   isSaving: boolean;
@@ -76,6 +78,7 @@ export default function ResumenVentaModal(props: Props) {
     pagoTransfer, setPagoTransfer,
     pagoTarjeta, setPagoTarjeta,
     notaPago, setNotaPago,
+    dineroEntregado, setDineroEntregado,
     venceStr, setVenceStr,
     showPicker, setShowPicker,
     addDays, toYMD,
@@ -98,6 +101,8 @@ export default function ResumenVentaModal(props: Props) {
 
   // ✅ Solo mostrar vence si es crédito
   const mostrarVence = esCreditoConfirmado;
+
+  const dineroTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   return (
     <Modal animationType="slide" transparent visible={visible} onRequestClose={onClose}>
@@ -259,9 +264,52 @@ export default function ResumenVentaModal(props: Props) {
                 </>
               )}
 
+              {/* Dinero entregado - solo contado */}
+              {!esCreditoConfirmado && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10 }}>
+                  <Text style={{ color: '#111827', fontWeight: '600' }}>Dinero entregado</Text>
+                  <TextInput
+                    style={{ width: 130, height: 40, backgroundColor: '#fff', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 8, paddingHorizontal: 10, textAlign: 'right', color: '#111827' }}
+                    placeholder="$0.00"
+                    keyboardType="decimal-pad"
+                    value={dineroEntregado}
+                    onChangeText={(v) => {
+                      setDineroEntregado(v);
+                      // Actualizar efectivo inmediatamente mientras escribe
+                      const entregado = parseFloat(v.replace(',', '.')) || 0;
+                      if (entregado > 0) {
+                        setPagoEfectivo(String(Math.min(entregado, totalVenta).toFixed(2)));
+                      } else {
+                        setPagoEfectivo('');
+                      }
+                      // Debounce 800ms para activar/desactivar crédito — esperar que termine de escribir
+                      if (dineroTimer.current) clearTimeout(dineroTimer.current);
+                      dineroTimer.current = setTimeout(() => {
+                        const val = parseFloat(v.replace(',', '.')) || 0;
+                        if (val > 0 && val < totalVenta) {
+                          // No cubre — activar crédito por el resto
+                          if (!esCreditoConfirmado) onToggleCredito();
+                        } else if (val >= totalVenta && esCreditoConfirmado) {
+                          // Cubre todo — quitar crédito
+                          onToggleCredito();
+                        }
+                      }, 800);
+                    }}
+                  />
+                </View>
+              )}
+
               {/* Summary */}
               <View style={{ marginTop: 10, gap: 4 }}>
+                <Text style={{ fontWeight: '700' }}>Total: {money(totalVenta)}</Text>
                 <Text style={{ fontWeight: '700' }}>Pagado: {money(pagosSuma)}</Text>
+
+                {!esCreditoConfirmado && Number(dineroEntregado || 0) > 0 && (
+                  <Text style={{ fontWeight: '700', color: Number(dineroEntregado || 0) >= totalVenta ? '#065F46' : '#991B1B' }}>
+                    {'Cambio: ' + money(Math.max(0, Number(dineroEntregado || 0) - totalVenta))}
+                    {Number(dineroEntregado || 0) < totalVenta ? '  ⚠️ Insuficiente' : ''}
+                  </Text>
+                )}
 
                 {excedente > 0 && (
                   <Text style={{ fontWeight: '700', color: '#991B1B' }}>Excedente: {money(excedente)}</Text>
@@ -277,7 +325,7 @@ export default function ResumenVentaModal(props: Props) {
 
                 {requiereConfirmarCredito && (
                   <Text style={{ marginTop: 6, color: '#991B1B', fontWeight: '800' }}>
-                    ⚠️ Hay saldo pendiente. Activa “Venta a crédito” para continuar.
+                    ⚠️ Hay saldo pendiente. Activa "Venta a crédito" para continuar.
                   </Text>
                 )}
               </View>

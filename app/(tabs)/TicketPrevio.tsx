@@ -60,7 +60,7 @@ type ResumenCategoria = {
 
 export default function TicketPrevio() {
   const router = useRouter();
-  const { preventa_id } = useLocalSearchParams();
+  const { preventa_id, dinero_entregado, cambio } = useLocalSearchParams();
 
   const [loading, setLoading] = useState(true);
   const [preventa, setPreventa] = useState<any>(null);
@@ -315,6 +315,10 @@ export default function TicketPrevio() {
                 ? `<div><strong>Pagado:</strong> ${money(pagado)} · <strong>Saldo:</strong> ${money(saldo)}</div>`
                 : ''
               }
+              ${(dinero_entregado && Number(dinero_entregado) > 0 && !esCreditoFlag) ? `
+                <div><strong>Dinero entregado:</strong> ${money(Number(dinero_entregado))}</div>
+                <div><strong>Cambio:</strong> ${money(Number(cambio || 0))}</div>
+              ` : ''}
               ${preventa?.nota_pago ? `<div><strong>Referencia:</strong> ${String(preventa.nota_pago)}</div>` : ''}
             </div>
 
@@ -412,6 +416,15 @@ export default function TicketPrevio() {
             <>
               <Text style={styles.label}><Ionicons name="cash" /> Montos:</Text>
               <Text>Pagado: {money(pagado)} · Saldo: {money(saldo)}</Text>
+            </>
+          )}
+
+          {!!dinero_entregado && Number(dinero_entregado) > 0 && !esCreditoFlag && (
+            <>
+              <Text style={styles.label}><Ionicons name="cash" /> Dinero entregado:</Text>
+              <Text>{money(Number(dinero_entregado))}</Text>
+              <Text style={styles.label}><Ionicons name="return-down-back" /> Cambio:</Text>
+              <Text style={{ fontWeight: '700', color: Colors.light.primario }}>{money(Number(cambio || 0))}</Text>
             </>
           )}
 
