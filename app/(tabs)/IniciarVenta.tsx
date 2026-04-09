@@ -193,6 +193,43 @@ export default function IniciarVenta() {
   };
 
   // ======= Fetch inventario / promos =======
+  // ✅ Expande el carrito agrupado en items por lote (FIFO) para el ticket
+  // Ej: FRUTIGUM x4 con _lotes=[{lote:A,qty:2},{lote:B,qty:17}] → [{lote:A,qty:2},{lote:B,qty:2}]
+  const expandirLotesFIFO = (carritoItems: any[]): any[] => {
+    const resultado: any[] = [];
+    for (const item of carritoItems) {
+      if (!item.producto_id || !item._lotes || item._lotes.length <= 1) {
+        // Sin múltiples lotes — pasar tal cual
+        resultado.push({
+          ...item,
+          producto: { ...item.producto, categoria: item.producto?.categoria || null },
+        });
+        continue;
+      }
+      // Distribuir cantidad entre lotes FIFO (caducidad más próxima primero)
+      const lotesOrdenados = [...item._lotes].sort((a: any, b: any) => {
+        if (!a.fecha_caducidad) return 1;
+        if (!b.fecha_caducidad) return -1;
+        return a.fecha_caducidad < b.fecha_caducidad ? -1 : 1;
+      });
+      let restante = Number(item.cantidad || 0);
+      for (const lote of lotesOrdenados) {
+        if (restante <= 0) break;
+        const cantLote = Math.min(restante, Number(lote.cantidad || 0));
+        if (cantLote <= 0) continue;
+        resultado.push({
+          ...item,
+          cantidad: cantLote,
+          lote: lote.lote,
+          fecha_caducidad: lote.fecha_caducidad,
+          producto: { ...item.producto, categoria: item.producto?.categoria || null },
+        });
+        restante -= cantLote;
+      }
+    }
+    return resultado;
+  };
+
   const fetchInventario = async () => {
     const token = await AsyncStorage.getItem('authToken');
     try {
@@ -371,15 +408,39 @@ export default function IniciarVenta() {
   const productosFiltrados = useMemo(() => {
     const q = busqueda.toLowerCase().trim();
 
-    return productos.filter((i) => {
+    // 1. Filtrar por búsqueda y categoría
+    const filtrados = productos.filter((i) => {
       const nombre = (i.producto?.nombre || '').toLowerCase();
       const matchBusqueda = q === '' ? true : nombre.includes(q);
-
       if (categoriaId === 0) return matchBusqueda;
-
       const catId = Number(i.producto?.categoria?.id || 0);
       return matchBusqueda && catId === categoriaId;
     });
+
+    // 2. Agrupar por producto_id — mostrar una sola tarjeta por producto
+    // FIFO: usar el lote con caducidad más próxima como referencia visual
+    const agrupados = new Map<number, any>();
+    for (const item of filtrados) {
+      const pid = item.producto_id ?? item.producto?.id;
+      if (!pid) continue;
+      if (!agrupados.has(pid)) {
+        agrupados.set(pid, {
+          ...item,
+          cantidad: Number(item.cantidad || 0),
+          _lotes: [{ lote: item.lote, fecha_caducidad: item.fecha_caducidad, cantidad: Number(item.cantidad || 0) }],
+        });
+      } else {
+        const existing = agrupados.get(pid);
+        existing.cantidad += Number(item.cantidad || 0);
+        existing._lotes.push({ lote: item.lote, fecha_caducidad: item.fecha_caducidad, cantidad: Number(item.cantidad || 0) });
+        // Mostrar el lote con caducidad más próxima (FIFO)
+        if (item.fecha_caducidad && (!existing.fecha_caducidad || item.fecha_caducidad < existing.fecha_caducidad)) {
+          existing.fecha_caducidad = item.fecha_caducidad;
+          existing.lote = item.lote;
+        }
+      }
+    }
+    return Array.from(agrupados.values());
   }, [productos, busqueda, categoriaId]);
 
   const promocionesFiltradas = useMemo(
@@ -388,6 +449,31 @@ export default function IniciarVenta() {
   );
 
   const totalProductosCount = carrito.reduce((acc, p) => acc + (Number(p.cantidad) || 0), 0);
+
+  // ✅ Carrito expandido por lotes para mostrar en resumen/modal
+  const carritoExpandido = useMemo(() => {
+    const resultado: any[] = [];
+    for (const item of carrito) {
+      if (!item.producto_id || !item._lotes || item._lotes.length <= 1) {
+        resultado.push(item);
+        continue;
+      }
+      const lotesOrdenados = [...item._lotes].sort((a: any, b: any) => {
+        if (!a.fecha_caducidad) return 1;
+        if (!b.fecha_caducidad) return -1;
+        return a.fecha_caducidad < b.fecha_caducidad ? -1 : 1;
+      });
+      let restante = Number(item.cantidad || 0);
+      for (const lote of lotesOrdenados) {
+        if (restante <= 0) break;
+        const cantLote = Math.min(restante, Number(lote.cantidad || 0));
+        if (cantLote <= 0) continue;
+        resultado.push({ ...item, cantidad: cantLote, lote: lote.lote, fecha_caducidad: lote.fecha_caducidad });
+        restante -= cantLote;
+      }
+    }
+    return resultado;
+  }, [carrito]);
 
   // ======= totales =======
   const subtotalProductos = carrito
@@ -527,6 +613,7 @@ export default function IniciarVenta() {
             ...producto,
             cantidad: 1,
             producto: { ...producto.producto, precio: priceOfInventoryItemForClient(producto) },
+            _lotes: producto._lotes || [], // ✅ preservar lotes para desglose en ticket
           },
         ];
       });
@@ -745,13 +832,15 @@ export default function IniciarVenta() {
 
       const token = await AsyncStorage.getItem('authToken');
 
-      const productosPayload = carrito
+      // ✅ Expandir lotes FIFO antes de mandar al backend de la preventa
+      const carritoExpandidoPreventa = expandirLotesFIFO(carrito);
+      const productosPayload = carritoExpandidoPreventa
         .filter((p) => p.producto_id && p.cantidad > 0)
         .map((p) => ({
           producto_id: p.producto_id,
           cantidad: Number(p.cantidad),
-          lote: p.lote ?? null,                         // ✅ agregar lote
-          fecha_caducidad: p.fecha_caducidad ?? null,   // ✅ agregar caducidad
+          lote: p.lote ?? null,
+          fecha_caducidad: p.fecha_caducidad ?? null,
         }));
 
       const promocionesPayload = carrito
@@ -819,15 +908,8 @@ export default function IniciarVenta() {
     justClosedRef.current = true;
     await clearDraft();
 
-    const carritoConCategoria = carrito.map(item => {
-      if (item.producto_id && item.producto) {
-        return {
-          ...item,
-          producto: { ...item.producto, categoria: item.producto.categoria || null },
-        };
-      }
-      return item;
-    });
+    // ✅ Expandir lotes FIFO para desglose correcto en ticket
+    const carritoConCategoria = expandirLotesFIFO(carrito);
 
     // reset
     setCarrito([]);
@@ -882,12 +964,8 @@ export default function IniciarVenta() {
     justClosedRef.current = true;
     await clearDraft();
 
-    const carritoConCategoria = carrito.map(item => {
-      if (item.producto_id && item.producto) {
-        return { ...item, producto: { ...item.producto, categoria: item.producto.categoria || null } };
-      }
-      return item;
-    });
+    // ✅ Expandir lotes FIFO para desglose correcto en ticket
+    const carritoConCategoria = expandirLotesFIFO(carrito);
 
     setCarrito([]);
     setCambiosVenta([]);
@@ -1070,7 +1148,8 @@ export default function IniciarVenta() {
                 <Text style={styles.catLine}>🏷️ {item.producto.categoria.nombre}</Text>
               )}
 
-              <Text style={styles.small}><Ionicons name="cube-outline" /> Cantidad: {item.cantidad}</Text>
+              <Text style={styles.small}><Ionicons name="cube-outline" /> Disponible: {item.cantidad} uds</Text>
+              {!!item.lote && <Text style={styles.small}><Ionicons name="barcode-outline" /> Lote: {item.lote}</Text>}
               <Text style={styles.small}><Ionicons name="calendar-outline" /> Caduca: {item.fecha_caducidad || 'N/D'}</Text>
               <Text style={styles.small}><Ionicons name="cash-outline" /> Precio: {money(priceOfInventoryItemForClient(item))}</Text>
               {CantidadEditor}
@@ -1110,7 +1189,7 @@ export default function IniciarVenta() {
       <ResumenVentaModal
         visible={modalVisible}
         onClose={() => setModalVisible(false)}
-        carrito={carrito}
+        carrito={carritoExpandido}
         money={money}
         priceForClient={priceForClient}
         subtotalProductos={subtotalProductos}
