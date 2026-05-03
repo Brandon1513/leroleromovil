@@ -129,7 +129,7 @@ export default function Ticket() {
     return formatMX(d, true);
   }, [fecha]);
 
-  // 🆕 Calcular resumen por categorías
+  // 🆕 Calcular resumen por categorías con desglose
   const resumenPorCategoria = useMemo(() => {
     const mapa = new Map<string, ResumenCategoria>();
 
@@ -141,22 +141,19 @@ export default function Ticket() {
         const monto = cantidad * precio;
 
         if (!mapa.has(categoria)) {
-          mapa.set(categoria, {
-            categoria,
-            totalUnidades: 0,
-            totalMonto: 0,
-            productos: [],
-          });
+          mapa.set(categoria, { categoria, totalUnidades: 0, totalMonto: 0, productos: [] });
         }
 
         const cat = mapa.get(categoria)!;
         cat.totalUnidades += cantidad;
         cat.totalMonto += monto;
-        cat.productos.push({
-          nombre: p.producto.nombre,
-          cantidad,
-          precio,
-        });
+        // Agrupar mismo producto dentro de la categoría
+        const existing = cat.productos.find(x => x.nombre === p.producto.nombre && x.precio === precio);
+        if (existing) {
+          existing.cantidad += cantidad;
+        } else {
+          cat.productos.push({ nombre: p.producto.nombre, cantidad, precio });
+        }
       }
     });
 
@@ -277,12 +274,16 @@ export default function Ticket() {
     const resumenCategoriasHTML = resumenPorCategoria
       .map((cat) => `
         <div style="margin-bottom:8px; padding:8px; background:#f8f9fa; border-radius:6px;">
-          <div style="font-weight:bold; color:#2c3e50; margin-bottom:4px;">
-            📦 ${cat.categoria}
+          <div style="display:flex; justify-content:space-between; font-weight:bold; color:#2c3e50; margin-bottom:4px;">
+            <span>📦 ${cat.categoria} <span style="font-weight:normal;font-size:11px;color:#6B7280">(${cat.totalUnidades} uds)</span></span>
+            <span>${money(cat.totalMonto)}</span>
           </div>
-          <div style="font-size:12px; color:#555;">
-            <strong>${cat.totalUnidades}</strong> unidades · ${money(cat.totalMonto)}
-          </div>
+          ${cat.productos.map((prod: any) => `
+            <div style="display:flex; justify-content:space-between; font-size:11px; color:#666; padding-left:10px; margin-top:2px;">
+              <span>• ${prod.nombre} x${prod.cantidad}</span>
+              <span>${money(prod.cantidad * prod.precio)}</span>
+            </div>
+          `).join('')}
         </div>
       `)
       .join('');
@@ -507,21 +508,33 @@ export default function Ticket() {
           })}
         </View>
 
-        {/* RESUMEN POR CATEGORÍAS */}
+        {/* RESUMEN POR CATEGORÍAS con desglose */}
         {resumenPorCategoria.length > 0 && (
           <View style={styles.section}>
             <Text style={styles.label}>📊 Resumen por Categoría</Text>
             {resumenPorCategoria.map((cat, idx) => (
               <View key={idx} style={styles.categoriaCard}>
-                <View style={styles.categoriaHeader}>
-                  <Text style={styles.categoriaNombre}>📦 {cat.categoria}</Text>
-                </View>
-                <View style={styles.categoriaInfo}>
-                  <Text style={styles.categoriaUnidades}>
-                    <Text style={{ fontWeight: '700' }}>{cat.totalUnidades}</Text> unidades
+                {/* Cabecera */}
+                <View style={[styles.categoriaInfo, { marginBottom: 6 }]}>
+                  <Text style={styles.categoriaNombre}>
+                    📦 {cat.categoria}{' '}
+                    <Text style={{ fontSize: 13, color: '#6B7280', fontWeight: '400' }}>
+                      ({cat.totalUnidades} uds)
+                    </Text>
                   </Text>
                   <Text style={styles.categoriaMonto}>{money(cat.totalMonto)}</Text>
                 </View>
+                {/* Desglose productos */}
+                {cat.productos.map((prod, i) => (
+                  <View key={i} style={{ flexDirection: 'row', justifyContent: 'space-between', paddingLeft: 12, paddingVertical: 2 }}>
+                    <Text style={{ fontSize: 12, color: '#6B7280' }}>
+                      • {prod.nombre} x{prod.cantidad}
+                    </Text>
+                    <Text style={{ fontSize: 12, color: '#6B7280' }}>
+                      {money(prod.cantidad * prod.precio)}
+                    </Text>
+                  </View>
+                ))}
               </View>
             ))}
           </View>

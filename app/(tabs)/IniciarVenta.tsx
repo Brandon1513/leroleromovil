@@ -1093,9 +1093,13 @@ export default function IniciarVenta() {
             : carrito.find((p) => p.producto_id === item.producto_id)?.cantidad || 0;
 
           const CantidadEditor = (
-            <View style={styles.qtyRow}>
-              <TouchableOpacity onPress={() => quitarProducto(item)}>
-                <Ionicons name="remove-circle-outline" size={26} color={Colors.light.primario} />
+            <View style={[styles.qtyRow, { marginTop: 10 }]}>
+              <TouchableOpacity
+                onPress={() => quitarProducto(item)}
+                style={styles.qtyBtn}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="remove" size={22} color={Colors.light.primario} />
               </TouchableOpacity>
 
               <TextInput
@@ -1110,8 +1114,12 @@ export default function IniciarVenta() {
                 maxLength={5}
               />
 
-              <TouchableOpacity onPress={() => agregarProducto(item)}>
-                <Ionicons name="add-circle-outline" size={26} color={Colors.light.primario} />
+              <TouchableOpacity
+                onPress={() => agregarProducto(item)}
+                style={[styles.qtyBtn, { backgroundColor: Colors.light.primario }]}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="add" size={22} color="#fff" />
               </TouchableOpacity>
             </View>
           );
@@ -1136,22 +1144,40 @@ export default function IniciarVenta() {
 
           return (
             <View style={styles.card}>
-              {item.producto?.imagen_url && (
-                <Image source={{ uri: item.producto.imagen_url }} style={styles.imagen} resizeMode="contain" />
-              )}
+              {/* Layout: info izquierda, imagen derecha */}
+              <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
 
-              <Text style={styles.nombre} numberOfLines={2}>
-                <Ionicons name="pricetag-outline" /> {item.producto?.nombre}
-              </Text>
+                {/* Info a la izquierda */}
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.nombre} numberOfLines={2}>
+                    <Ionicons name="pricetag-outline" /> {item.producto?.nombre}
+                  </Text>
 
-              {!!item.producto?.categoria?.nombre && (
-                <Text style={styles.catLine}>🏷️ {item.producto.categoria.nombre}</Text>
-              )}
+                  {!!item.producto?.categoria?.nombre && (
+                    <Text style={styles.catLine}>🏷️ {item.producto.categoria.nombre}</Text>
+                  )}
 
-              <Text style={styles.small}><Ionicons name="cube-outline" /> Disponible: {item.cantidad} uds</Text>
-              {!!item.lote && <Text style={styles.small}><Ionicons name="barcode-outline" /> Lote: {item.lote}</Text>}
-              <Text style={styles.small}><Ionicons name="calendar-outline" /> Caduca: {item.fecha_caducidad || 'N/D'}</Text>
-              <Text style={styles.small}><Ionicons name="cash-outline" /> Precio: {money(priceOfInventoryItemForClient(item))}</Text>
+                  <Text style={styles.small}><Ionicons name="cube-outline" /> Disponible: {item.cantidad} uds</Text>
+                  {!!item.lote && <Text style={styles.small}><Ionicons name="barcode-outline" /> Lote: {item.lote}</Text>}
+                  <Text style={styles.small}><Ionicons name="calendar-outline" /> Caduca: {item.fecha_caducidad || 'N/D'}</Text>
+                  <Text style={styles.small}><Ionicons name="cash-outline" /> Precio: {money(priceOfInventoryItemForClient(item))}</Text>
+                </View>
+
+                {/* Imagen a la derecha */}
+                {item.producto?.imagen_url ? (
+                  <Image
+                    source={{ uri: item.producto.imagen_url }}
+                    style={styles.imagen}
+                    resizeMode="contain"
+                  />
+                ) : (
+                  <View style={styles.imagenPlaceholder}>
+                    <Ionicons name="cube-outline" size={28} color="#9CA3AF" />
+                  </View>
+                )}
+              </View>
+
+              {/* Editor de cantidad debajo */}
               {CantidadEditor}
             </View>
           );
@@ -1373,20 +1399,50 @@ const styles = StyleSheet.create({
   chipBadgeText: { fontSize: 11, fontWeight: '800', color: '#374151' },
 
   card: {
-    backgroundColor: '#fff', padding: 12, borderRadius: 12, marginBottom: 10,
-    shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 4, elevation: 2
+    backgroundColor: '#fff',
+    padding: 14,
+    borderRadius: 14,
+    marginBottom: 10,
+    shadowColor: '#000',
+    shadowOpacity: 0.07,
+    shadowRadius: 6,
+    elevation: 3,
   },
-  nombre: { fontWeight: '700', marginBottom: 4, color: '#111827' },
+  nombre: { fontWeight: '800', fontSize: 15, marginBottom: 3, color: '#111827' },
   small: { color: '#374151', marginTop: 2 },
+  badge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 6,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+  },
+  badgeText: { fontSize: 11, color: '#374151', fontWeight: '600' },
   catLine: { marginTop: 2, fontWeight: '700', color: '#6B7280' },
 
-  qtyRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10 },
+  qtyRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10, justifyContent: 'flex-start' },
+  qtyBtn: {
+    width: 50, height: 50, borderRadius: 12,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1.5, borderColor: '#E5E7EB',
+  },
   qtyInput: {
-    minWidth: 52, paddingHorizontal: 10, height: 36, backgroundColor: '#F3F4F6',
-    borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 8, textAlign: 'center', color: '#111827'
+    width: 70, paddingHorizontal: 8, height: 50,
+    backgroundColor: '#F9FAFB',
+    borderWidth: 1.5, borderColor: '#E5E7EB',
+    borderRadius: 12, textAlign: 'center',
+    color: '#111827', fontSize: 18, fontWeight: '700',
   },
 
-  imagen: { width: '100%', height: 120, borderRadius: 8, marginBottom: 8 },
+  imagen: { width: 120, height: 120, borderRadius: 10, backgroundColor: '#F9FAFB' },
+  imagenPlaceholder: {
+    width: 100, height: 100, borderRadius: 10,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center', justifyContent: 'center',
+  },
 
   carritoBtn: {
     position: 'absolute', bottom: 30, right: 20,

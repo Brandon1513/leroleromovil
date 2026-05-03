@@ -5,7 +5,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import * as Location from 'expo-location';
 import { Colors } from '@/constants/Colors';
 import { API_BASE_URL } from '@/constants/Config';
@@ -22,7 +22,7 @@ type Cliente = {
   nivel_precio?: { nombre?: string | null } | null;
   nivel_precio_nombre?: string | null;
   saldo_pendiente_total?: number;
-  bloqueado?: boolean; // saldo pendiente
+  bloqueado?: boolean;
 };
 
 type MeResponse = {
@@ -45,7 +45,6 @@ export default function Ventas() {
   const [loading, setLoading] = useState(true);
   const [checkingId, setCheckingId] = useState<number | null>(null);
 
-  // ✅ bloqueo ventas por cierre ruta
   const [ventasBloqueadas, setVentasBloqueadas] = useState(false);
   const [ventasBloqueadasMotivo, setVentasBloqueadasMotivo] = useState<string | null>(null);
   const [ventasBloqueadasCierreId, setVentasBloqueadasCierreId] = useState<number | null>(null);
@@ -53,7 +52,15 @@ export default function Ventas() {
 
   const router = useRouter();
 
-  // Helpers de navegación segura → IniciarVenta
+  // ✅ Leer parámetro desde Rutas para preseleccionar cliente en buscador
+  const { buscar_cliente } = useLocalSearchParams();
+
+  useEffect(() => {
+    if (buscar_cliente && typeof buscar_cliente === 'string') {
+      setBusqueda(buscar_cliente);
+    }
+  }, [buscar_cliente]);
+
   const encodeCliente = (c: Partial<Cliente> | null | undefined) => {
     if (!c || typeof c !== 'object') return '';
     const lite = { id: (c as any).id, nombre: (c as any).nombre };
@@ -70,7 +77,6 @@ export default function Ventas() {
     });
   };
 
-  // ✅ helper: /api/me
   const fetchMe = useCallback(async () => {
     const token = await AsyncStorage.getItem('authToken');
     if (!token) {
@@ -79,27 +85,22 @@ export default function Ventas() {
       setVentasBloqueadasCierreId(null);
       return { blocked: false };
     }
-
     try {
       setCheckingMe(true);
       const res = await fetch(`${API_BASE_URL}/api/me`, {
         headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
       });
-
       if (!res.ok) {
         setVentasBloqueadas(false);
         setVentasBloqueadasMotivo(null);
         setVentasBloqueadasCierreId(null);
         return { blocked: false };
       }
-
       const me: MeResponse = await res.json();
       const blocked = Boolean(me?.ventas_bloqueadas);
-
       setVentasBloqueadas(blocked);
       setVentasBloqueadasMotivo(me?.ventas_bloqueadas_motivo ?? null);
       setVentasBloqueadasCierreId(me?.ventas_bloqueadas_cierre_id ?? null);
-
       return { blocked, motivo: me?.ventas_bloqueadas_motivo ?? null, cierreId: me?.ventas_bloqueadas_cierre_id ?? null };
     } catch {
       setVentasBloqueadas(false);
@@ -117,7 +118,6 @@ export default function Ventas() {
       (motivo ? `\nMotivo: ${motivo}\n` : '') +
       (cierreId ? `\nCierre ID: ${cierreId}\n` : '') +
       `\nPara vender de nuevo debes solicitar liberación al administrador.`;
-
     Alert.alert('Ventas bloqueadas', msg, [{ text: 'Entendido' }]);
   }, []);
 
@@ -150,28 +150,23 @@ export default function Ventas() {
   };
 
   useEffect(() => {
-    // primera carga: checar bloqueo + clientes
     (async () => {
       await fetchMe();
       await fetchClientes();
     })();
   }, [fetchMe]);
 
-  // 🔑 IMPORTANTE: useMemo ANTES de useFocusEffect
   const clientesFiltrados = useMemo(
     () => clientes.filter(c => (c.nombre || '').toLowerCase().includes(busqueda.toLowerCase())),
     [clientes, busqueda]
   );
 
-  // 🔑 IMPORTANTE: Header memoizado ANTES de useFocusEffect
   const HeaderComponent = useMemo(() => (
     <View style={styles.header}>
       <View style={styles.titleRow}>
         <Ionicons name="cart-outline" size={20} color={Colors.light.primario} />
         <Text style={styles.titulo}>Nueva Venta</Text>
       </View>
-
-      {/* ✅ banner bloqueo */}
       {ventasBloqueadas && (
         <TouchableOpacity
           activeOpacity={0.9}
@@ -184,7 +179,6 @@ export default function Ventas() {
           </Text>
         </TouchableOpacity>
       )}
-
       <View style={styles.searchWrap}>
         <Ionicons name="search" size={18} color="#6B7280" />
         <TextInput
@@ -209,14 +203,9 @@ export default function Ventas() {
 
   useFocusEffect(
     useCallback(() => {
-      // cada vez que vuelves a la pantalla:
-      // 1) checar bloqueo
-      // ✅ FIX: 2) recargar clientes — antes NUNCA se recargaba al volver,
-      //    así que los saldos y estados quedaban desactualizados
-      // 3) checar borrador
       (async () => {
         await fetchMe();
-        await fetchClientes(); // ← LÍNEA CLAVE QUE FALTABA
+        await fetchClientes();
 
         const draft = await getDraft();
         if (!draft) return;
@@ -241,21 +230,11 @@ export default function Ventas() {
                 if (!enc) return;
                 router.push({
                   pathname: '/IniciarVenta',
-                  params: {
-                    cliente: enc,
-                    cliente_id: String(draft.cliente.id),
-                    resume: '1',
-                  },
+                  params: { cliente: enc, cliente_id: String(draft.cliente.id), resume: '1' },
                 });
               },
             },
-            {
-              text: 'Descartar',
-              style: 'destructive',
-              onPress: async () => {
-                await clearDraft();
-              }
-            },
+            { text: 'Descartar', style: 'destructive', onPress: async () => { await clearDraft(); } },
             { text: 'Cerrar', style: 'cancel' },
           ],
         );
@@ -275,8 +254,7 @@ export default function Ventas() {
     const φ1 = toRad(lat1), φ2 = toRad(lat2);
     const Δφ = toRad(lat2 - lat1), Δλ = toRad(lon2 - lon1);
     const a = Math.sin(Δφ/2)**2 + Math.cos(φ1)*Math.cos(φ2)*Math.sin(Δλ/2)**2;
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   };
 
   const formatMeters = (m: number) => (m < 1000 ? `${m.toFixed(0)} m` : `${(m/1000).toFixed(2)} km`);
@@ -299,58 +277,28 @@ export default function Ventas() {
   const confirmarInicioVenta = (cliente: Cliente) => {
     Alert.alert('Iniciar venta', `¿Deseas iniciar una venta para ${cliente.nombre}?`, [
       { text: 'Cancelar', style: 'cancel' },
-      {
-        text: 'Aceptar',
-        onPress: () => {
-          const rid = Date.now().toString();
-          goIniciar(cliente, { rid });
-        },
-      },
+      { text: 'Aceptar', onPress: () => { goIniciar(cliente, { rid: Date.now().toString() }); } },
     ]);
   };
 
   const intentarIniciarVenta = async (cliente: Cliente) => {
-    // ✅ bloqueo global por cierre
     const me = await fetchMe();
     if (me?.blocked) {
       showBlockedAlert(me.motivo ?? ventasBloqueadasMotivo, me.cierreId ?? ventasBloqueadasCierreId);
       return;
     }
 
-    // borrador
     const draft = await getDraft();
     if (draft) {
-      const hasValidContent =
-        draft?.cliente?.id &&
-        (draft.carrito.length > 0 || Number(draft.total ?? 0) > 0);
-
+      const hasValidContent = draft?.cliente?.id && (draft.carrito.length > 0 || Number(draft.total ?? 0) > 0);
       if (hasValidContent) {
         const enc = encodeCliente(draft?.cliente as any);
         Alert.alert(
           'Venta pendiente',
           `Tienes una venta sin cerrar para "${draft?.cliente?.nombre ?? 'cliente'}".`,
           [
-            {
-              text: 'Reanudar',
-              onPress: () => {
-                if (enc) router.push({
-                  pathname: '/IniciarVenta',
-                  params: {
-                    cliente: enc,
-                    cliente_id: String(draft?.cliente?.id ?? ''),
-                    resume: '1'
-                  }
-                });
-              }
-            },
-            {
-              text: 'Descartar',
-              style: 'destructive',
-              onPress: async () => {
-                await clearDraft();
-                setTimeout(() => intentarIniciarVenta(cliente), 300);
-              }
-            },
+            { text: 'Reanudar', onPress: () => { if (enc) router.push({ pathname: '/IniciarVenta', params: { cliente: enc, cliente_id: String(draft?.cliente?.id ?? ''), resume: '1' } }); } },
+            { text: 'Descartar', style: 'destructive', onPress: async () => { await clearDraft(); setTimeout(() => intentarIniciarVenta(cliente), 300); } },
             { text: 'Cancelar', style: 'cancel' },
           ]
         );
@@ -360,21 +308,13 @@ export default function Ventas() {
       }
     }
 
-    // bloqueo por saldo
     if (cliente.bloqueado) {
       Alert.alert(
         'Saldo pendiente',
         `${cliente.nombre} tiene ${money(cliente.saldo_pendiente_total)} sin pagar.\nRealiza la cobranza para continuar.`,
         [
           { text: 'Cancelar', style: 'cancel' },
-          {
-            text: 'Ir a Cobranza',
-            onPress: () => {
-              const enc = encodeCliente(cliente);
-              if (!enc) return;
-              router.push({ pathname: '/cobranza-cliente', params: { cliente: enc } });
-            },
-          },
+          { text: 'Ir a Cobranza', onPress: () => { const enc = encodeCliente(cliente); if (!enc) return; router.push({ pathname: '/cobranza-cliente', params: { cliente: enc } }); } },
         ]
       );
       return;
@@ -385,10 +325,7 @@ export default function Ventas() {
       const { ok, distancia } = await checkUbicacion(cliente);
       if (!ok) {
         if (distancia !== null) {
-          Alert.alert(
-            'Ubicación incorrecta',
-            `Debes estar cerca del cliente para iniciar la venta.\nTe encuentras a ${formatMeters(distancia)} (máx. ${RADIUS_METERS} m).`
-          );
+          Alert.alert('Ubicación incorrecta', `Debes estar cerca del cliente para iniciar la venta.\nTe encuentras a ${formatMeters(distancia)} (máx. ${RADIUS_METERS} m).`);
         }
         return;
       }
@@ -409,7 +346,6 @@ export default function Ventas() {
   const renderItem = ({ item }: { item: Cliente }) => {
     const tieneCoords = !!item.latitud && !!item.longitud;
     const blockedSaldo = Boolean(item.bloqueado);
-
     return (
       <TouchableOpacity activeOpacity={0.9} onPress={() => intentarIniciarVenta(item)} style={styles.card}>
         <View style={styles.cardHeader}>
@@ -417,72 +353,39 @@ export default function Ventas() {
             <Ionicons name="person-circle-outline" size={22} color={Colors.light.primario} />
             <Text style={styles.nombre} numberOfLines={1}>{item.nombre}</Text>
           </View>
-
           <TouchableOpacity
-            style={[
-              styles.actionBtn,
-              blockedSaldo && styles.actionBtnWarn,
-              ventasBloqueadas && styles.actionBtnDisabled,
-            ]}
+            style={[styles.actionBtn, blockedSaldo && styles.actionBtnWarn, ventasBloqueadas && styles.actionBtnDisabled]}
             onPress={(e) => { e.stopPropagation(); intentarIniciarVenta(item); }}
             disabled={checkingId === item.id || ventasBloqueadas || checkingMe}
           >
             {checkingId === item.id || checkingMe ? (
               <ActivityIndicator size="small" color="#fff" />
             ) : blockedSaldo ? (
-              <>
-                <Ionicons name="cash-outline" size={16} color="#fff" />
-                <Text style={styles.actionText}>Cobranza</Text>
-              </>
+              <><Ionicons name="cash-outline" size={16} color="#fff" /><Text style={styles.actionText}>Cobranza</Text></>
             ) : (
-              <>
-                <Ionicons name="play-circle-outline" size={16} color="#fff" />
-                <Text style={styles.actionText}>Iniciar</Text>
-              </>
+              <><Ionicons name="play-circle-outline" size={16} color="#fff" /><Text style={styles.actionText}>Iniciar</Text></>
             )}
           </TouchableOpacity>
         </View>
-
         <View style={styles.rows}>
-          <View style={styles.row}>
-            <Ionicons name="call-outline" size={16} color="#6B7280" />
-            <Text style={styles.text} numberOfLines={1}>{item.telefono || 'Sin teléfono'}</Text>
-          </View>
-          <View style={styles.row}>
-            <Ionicons name="pricetag-outline" size={16} color="#6B7280" />
-            <Text style={styles.text} numberOfLines={1}>
-              {item?.nivel_precio?.nombre ?? item?.nivel_precio_nombre ?? 'Sin nivel de precio'}
-            </Text>
-          </View>
+          <View style={styles.row}><Ionicons name="call-outline" size={16} color="#6B7280" /><Text style={styles.text} numberOfLines={1}>{item.telefono || 'Sin teléfono'}</Text></View>
+          <View style={styles.row}><Ionicons name="pricetag-outline" size={16} color="#6B7280" /><Text style={styles.text} numberOfLines={1}>{item?.nivel_precio?.nombre ?? item?.nivel_precio_nombre ?? 'Sin nivel de precio'}</Text></View>
         </View>
-
         <View style={styles.badges}>
           <View style={[styles.badge, tieneCoords ? styles.badgeOk : styles.badgeWarn]}>
-            <Ionicons
-              name={tieneCoords ? 'location-outline' : 'alert-circle-outline'}
-              size={14}
-              color={tieneCoords ? '#065F46' : '#92400E'}
-            />
-            <Text style={[styles.badgeText, { color: tieneCoords ? '#065F46' : '#92400E' }]}>
-              {tieneCoords ? 'Ubicación configurada' : 'Sin ubicación'}
-            </Text>
+            <Ionicons name={tieneCoords ? 'location-outline' : 'alert-circle-outline'} size={14} color={tieneCoords ? '#065F46' : '#92400E'} />
+            <Text style={[styles.badgeText, { color: tieneCoords ? '#065F46' : '#92400E' }]}>{tieneCoords ? 'Ubicación configurada' : 'Sin ubicación'}</Text>
           </View>
-
           {blockedSaldo && (
             <View style={[styles.badge, styles.badgeDebt]}>
               <Ionicons name="warning-outline" size={14} color="#991B1B" />
-              <Text style={[styles.badgeText, { color: '#991B1B' }]}>
-                Saldo: {money(item.saldo_pendiente_total)}
-              </Text>
+              <Text style={[styles.badgeText, { color: '#991B1B' }]}>Saldo: {money(item.saldo_pendiente_total)}</Text>
             </View>
           )}
-
           {ventasBloqueadas && (
             <View style={[styles.badge, styles.badgeBlocked]}>
               <Ionicons name="lock-closed-outline" size={14} color="#7F1D1D" />
-              <Text style={[styles.badgeText, { color: '#7F1D1D' }]}>
-                Ventas bloqueadas
-              </Text>
+              <Text style={[styles.badgeText, { color: '#7F1D1D' }]}>Ventas bloqueadas</Text>
             </View>
           )}
         </View>
@@ -500,14 +403,7 @@ export default function Ventas() {
         renderItem={renderItem}
         contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 24 }}
         ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            colors={[Colors.light.primario]}
-            tintColor={Colors.light.primario}
-          />
-        }
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[Colors.light.primario]} tintColor={Colors.light.primario} />}
         ListEmptyComponent={
           <View style={styles.empty}>
             <Ionicons name="file-tray-outline" size={48} color="#9CA3AF" />
@@ -525,20 +421,8 @@ const styles = StyleSheet.create({
   header: { backgroundColor: '#fff', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 12, borderBottomColor: '#E5E7EB', borderBottomWidth: 1 },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
   titulo: { fontSize: 20, fontWeight: '800', color: Colors.light.primario },
-
-  blockBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    padding: 10,
-    borderRadius: 12,
-    backgroundColor: '#FEE2E2',
-    borderWidth: 1,
-    borderColor: '#FCA5A5',
-    marginBottom: 10,
-  },
+  blockBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 10, borderRadius: 12, backgroundColor: '#FEE2E2', borderWidth: 1, borderColor: '#FCA5A5', marginBottom: 10 },
   blockBannerText: { flex: 1, fontWeight: '800', color: '#991B1B', fontSize: 12 },
-
   searchWrap: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#F2F2F2', borderRadius: 12, paddingHorizontal: 12, height: 44, borderWidth: 1, borderColor: '#E5E7EB' },
   input: { flex: 1, height: 44, color: '#111827' },
   card: { backgroundColor: '#fff', padding: 14, borderRadius: 14, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 6, elevation: 2 },

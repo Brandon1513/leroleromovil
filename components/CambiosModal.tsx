@@ -1,5 +1,5 @@
 // CambiosModal.tsx
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -64,12 +64,48 @@ export default function CambiosModal({
 
   const inventario = Array.isArray(productos) ? productos : [];
 
-  // 🔑 clave única por renglón de inventario (producto+lote+cad)
+  // ✅ Todos los productos del inventario (incluyendo sin stock) para la lista de devueltos
+  const [todosProductos, setTodosProductos] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (!visible) return;
+    (async () => {
+      try {
+        const token = await AsyncStorage.getItem('authToken');
+        // ✅ Catálogo completo — todos los productos sin lotes ni stock
+        // Para que el vendedor pueda seleccionar cualquier producto devuelto
+        const res = await fetch(`${API_BASE_URL}/api/productos-catalogo`, {
+          headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setTodosProductos(Array.isArray(data) ? data : []);
+        }
+      } catch (e) {
+        setTodosProductos(inventario);
+      }
+    })();
+  }, [visible]);
+
+  // Lista de devueltos: catálogo completo deduplicado por producto_id (un item por producto)
+  // Lista de sustituciones: inventario actual con stock (para descontar)
+  const inventarioParaDevueltos = useMemo(() => {
+    const base = todosProductos.length > 0 ? todosProductos : inventario;
+    const seen = new Set<number>();
+    return base.filter((item: any) => {
+      const pid = item?.producto_id ?? item?.producto?.id;
+      if (!pid || seen.has(pid)) return false;
+      seen.add(pid);
+      return true;
+    });
+  }, [todosProductos, inventario]);
+
+  // 🔑 clave única por renglón de inventario (producto+lote+cad) — para sustituciones
   const invKeyOf = (invItem: any) =>
     `${invItem?.producto_id ?? 'x'}|${invItem?.lote ?? 'null'}|${invItem?.fecha_caducidad ?? 'null'}`;
 
-  // 🔑 clave única del cambio (devuelto) también basado en (producto+lote+cad)
-  const changeKeyOf = (invItem: any) => invKeyOf(invItem);
+  // 🔑 clave del cambio devuelto — solo por producto_id (catálogo sin lotes)
+  const changeKeyOf = (invItem: any) => `prod-${invItem?.producto_id ?? 'x'}`;
 
   const getNombre = (item: any) => item?.producto?.nombre || item?.producto?.name || 'Producto';
 
@@ -266,22 +302,22 @@ export default function CambiosModal({
 
   const categorias = useMemo(() => {
     const cats = new Map<string, string>();
-    inventario.forEach((it: any) => {
+    inventarioParaDevueltos.forEach((it: any) => {
       const cat = it?.producto?.categoria;
       if (cat?.id && cat?.nombre) cats.set(String(cat.id), cat.nombre);
     });
     return Array.from(cats.entries()).map(([id, nombre]) => ({ id, nombre }));
-  }, [inventario]);
+  }, [inventarioParaDevueltos]);
 
   // Filtro para el modal principal (lista de productos a devolver)
   const inventarioFiltradoPrincipal = useMemo(() => {
     const q = buscar.trim().toLowerCase();
-    return inventario.filter((it: any) => {
+    return inventarioParaDevueltos.filter((it: any) => {
       const matchBuscar = !q || (getNombre(it) || '').toLowerCase().includes(q);
       const matchCategoria = !categoriaActiva || String(it?.producto?.categoria?.id) === categoriaActiva;
       return matchBuscar && matchCategoria;
     });
-  }, [buscar, categoriaActiva, inventario]);
+  }, [buscar, categoriaActiva, inventarioParaDevueltos]);
 
   const pickerData = useMemo(() => {
     const base = inventario.filter((it) => (Number(it?.cantidad) || 0) > 0);
@@ -941,8 +977,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14, paddingVertical: 7, height: 34,
     borderRadius: 999, backgroundColor: '#F3F4F6',
     borderWidth: 1, borderColor: '#E5E7EB',
-    flexShrink: 0, justifyContent: 'center', alignItems: 'center', marginBottom: 17,
-    },
+    flexShrink: 0, justifyContent: 'center', alignItems: 'center',
+  },
   catChipActivo: { backgroundColor: Colors.light.primario, borderColor: Colors.light.primario },
   catChipText: { fontSize: 12, fontWeight: '600', color: '#374151' },
   catChipTextActivo: { color: '#fff' },

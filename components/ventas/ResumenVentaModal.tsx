@@ -150,6 +150,64 @@ export default function ResumenVentaModal(props: Props) {
                   return null;
                 })}
 
+                {/* Resumen por categoría con desglose */}
+                {(() => {
+                  const mapa = new Map<string, { unidades: number; monto: number; productos: {nombre: string; cantidad: number; precio: number}[] }>();
+                  carrito.forEach((p: any) => {
+                    if (p.producto_id && p.producto) {
+                      const cat = p.producto.categoria?.nombre || 'Sin categoría';
+                      const qty = Number(p.cantidad || 0);
+                      const precio = Number(priceForClient(p.producto));
+                      const prev = mapa.get(cat) || { unidades: 0, monto: 0, productos: [] };
+                      // Agrupar mismo producto dentro de la categoría
+                      const existing = prev.productos.find(x => x.nombre === p.producto.nombre && x.precio === precio);
+                      if (existing) {
+                        existing.cantidad += qty;
+                      } else {
+                        prev.productos.push({ nombre: p.producto.nombre, cantidad: qty, precio });
+                      }
+                      mapa.set(cat, { unidades: prev.unidades + qty, monto: prev.monto + qty * precio, productos: prev.productos });
+                    }
+                  });
+                  const cats = Array.from(mapa.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+                  if (cats.length === 0) return null;
+                  return (
+                    <View style={{ marginTop: 10, padding: 8, backgroundColor: '#F3F4F6', borderRadius: 8 }}>
+                      <Text style={{ fontWeight: '700', fontSize: 12, color: '#374151', marginBottom: 6 }}>
+                        📊 Resumen por categoría
+                      </Text>
+                      {cats.map(([cat, data]) => (
+                        <View key={cat} style={{ marginBottom: 8 }}>
+                          {/* Cabecera categoría */}
+                          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <Text style={{ fontSize: 12, fontWeight: '800', color: '#111827' }}>
+                              📦 {cat} <Text style={{ color: '#6B7280' }}>({data.unidades} uds)</Text>
+                            </Text>
+                            <Text style={{ fontSize: 12, fontWeight: '800', color: Colors.light.primario }}>
+                              {money(data.monto)}
+                            </Text>
+                          </View>
+                          {/* Desglose productos */}
+                          {data.productos.map((prod, i) => (
+                            <View key={i} style={{ flexDirection: 'row', justifyContent: 'space-between', paddingLeft: 12, paddingTop: 2 }}>
+                              <Text style={{ fontSize: 11, color: '#6B7280' }}>
+                                • {prod.nombre} x{prod.cantidad}
+                              </Text>
+                              <Text style={{ fontSize: 11, color: '#6B7280' }}>
+                                {money(prod.cantidad * prod.precio)}
+                              </Text>
+                            </View>
+                          ))}
+                          {/* Línea separadora entre categorías */}
+                          {cats.indexOf(cats.find(c => c[0] === cat)!) < cats.length - 1 && (
+                            <View style={{ height: 1, backgroundColor: '#E5E7EB', marginTop: 6 }} />
+                          )}
+                        </View>
+                      ))}
+                    </View>
+                  );
+                })()}
+
                 <View style={{ marginTop: 12 }}>
                   <Text style={{ fontWeight: 'bold' }}>Subtotal productos: {money(subtotalProductos)}</Text>
                   <Text style={{ fontWeight: 'bold' }}>Subtotal promociones: {money(subtotalPromos)}</Text>
