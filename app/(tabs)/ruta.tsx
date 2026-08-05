@@ -1,4 +1,4 @@
-// RutaOptimizada.tsx - VERSIÓN CORREGIDA
+// RutaOptimizada.tsx - VERSIÓN CORREGIDA + FIX VISITA AUTOMÁTICA + DEBUG LOGS
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import {
   View,
@@ -23,6 +23,7 @@ import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import Toast from 'react-native-toast-message';
+import { APP_VERSION } from '@/constants/AppVersion';
 
 type MotivoNoVenta =
   | 'sin_dinero'
@@ -40,11 +41,9 @@ export default function RutaOptimizada() {
   const [visitados, setVisitados] = useState<Record<number, boolean>>({});
   const [refreshing, setRefreshing] = useState(false);
   const [botonDeshabilitado, setBotonDeshabilitado] = useState(false);
-  // ✅ BUSCADOR + FILTROS
   const [busqueda, setBusqueda] = useState('');
   const [soloNoVisitados, setSoloNoVisitados] = useState(false);
 
-  // 🆕 Estados para el modal de registro de visita
   const [modalVisible, setModalVisible] = useState(false);
   const [clienteSeleccionado, setClienteSeleccionado] = useState<any>(null);
   const [realizoVenta, setRealizoVenta] = useState<boolean | null>(null);
@@ -69,6 +68,30 @@ export default function RutaOptimizada() {
 
   const getHoy = () => new Date().toISOString().split('T')[0];
 
+  // ✅ Envía logs al backend para debug remoto en APK de producción
+  // Solo se llama cuando ocurre algo sospechoso (botón bloqueado, etc.)
+  const enviarLogDebug = async (evento: string, datos: object) => {
+    try {
+      const token = await AsyncStorage.getItem('authToken');
+      if (!token) return;
+      await fetch(`${API_BASE_URL}/api/debug-ruta`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          evento,
+          datos,
+          timestamp: new Date().toISOString(),
+        }),
+      });
+    } catch (e) {
+      // silencioso — no interrumpir el flujo
+    }
+  };
+
   useEffect(() => {
     (async () => {
       await verificarCambioDia();
@@ -78,7 +101,6 @@ export default function RutaOptimizada() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ✅ Recargar datos cada vez que se vuelve a la pantalla
   useFocusEffect(
     useCallback(() => {
       (async () => {
@@ -91,8 +113,11 @@ export default function RutaOptimizada() {
 
   const verificarCambioDia = async () => {
     const fechaGuardada = await AsyncStorage.getItem(STORAGE_KEYS.FECHA_ESTADO);
+    const rutaCerrada = await AsyncStorage.getItem(STORAGE_KEYS.RUTA_CERRADA);
     const hoy = getHoy();
+
     if (fechaGuardada !== hoy) {
+      // Cambió el día — limpiar todo el estado local
       await AsyncStorage.multiRemove([
         STORAGE_KEYS.VISITADOS,
         STORAGE_KEYS.RUTA_CERRADA,
@@ -102,8 +127,16 @@ export default function RutaOptimizada() {
       setBotonDeshabilitado(false);
       await AsyncStorage.setItem(STORAGE_KEYS.FECHA_ESTADO, hoy);
     } else {
-      const rutaCerrada = await AsyncStorage.getItem(STORAGE_KEYS.RUTA_CERRADA);
-      if (rutaCerrada === 'true') setBotonDeshabilitado(true);
+      // Mismo día — restaurar estado
+      if (rutaCerrada === 'true') {
+        setBotonDeshabilitado(true);
+        // Log remoto: botón bloqueado por AsyncStorage
+        await enviarLogDebug('boton_bloqueado_por_storage', {
+          fechaGuardada,
+          hoy,
+          rutaCerrada,
+        });
+      }
     }
   };
 
@@ -116,13 +149,19 @@ export default function RutaOptimizada() {
       });
       if (!res.ok) return;
       const data = await res.json();
-      // ✅ Si el cierre fue cuadrado normalmente, mantener ruta cerrada
+
       if (data.cierre_cuadrado_hoy === true) {
         setBotonDeshabilitado(true);
         await AsyncStorage.setItem(STORAGE_KEYS.RUTA_CERRADA, 'true');
+        // Log remoto: botón bloqueado por cierre cuadrado
+        await enviarLogDebug('boton_bloqueado_por_cierre_cuadrado', {
+          cierre_cuadrado_hoy: data.cierre_cuadrado_hoy,
+          cierre_hoy: data.cierre_hoy,
+          fue_liberado: data.fue_liberado,
+          ventas_bloqueadas: data.ventas_bloqueadas,
+        });
       }
 
-      // ✅ fue_liberado=true solo cuando admin liberó manualmente (no al cuadrar)
       if (data.fue_liberado === true && data.cierre_cuadrado_hoy !== true) {
         await AsyncStorage.multiRemove([
           STORAGE_KEYS.RUTA_CERRADA,
@@ -210,6 +249,17 @@ export default function RutaOptimizada() {
 
         setVisitados(visitadosDelBackend);
         await AsyncStorage.setItem(STORAGE_KEYS.VISITADOS, JSON.stringify(visitadosDelBackend));
+
+        // Log remoto: si el backend ya marca todos como visitados al cargar
+        const todosYaVisitados = clientesOrdenados.length > 0 &&
+          clientesOrdenados.every((c: any) => visitadosDelBackend[Number(c.id)] === true);
+        if (todosYaVisitados) {
+          await enviarLogDebug('todos_visitados_segun_backend', {
+            total_clientes: clientesOrdenados.length,
+            visitados: visitadosDelBackend,
+            clientes: clientesOrdenados.map((c: any) => ({ id: c.id, nombre: c.nombre })),
+          });
+        }
       } else {
         setClientes([]);
       }
@@ -249,24 +299,13 @@ export default function RutaOptimizada() {
     setModalVisible(true);
   };
 
-  // ✅ Calcular distancia al cliente
-  const calcularDistancia = (lat1: number, lon1: number, lat2: number, lon2: number) => {
-    const R = 6371e3;
-    const toRad = (v: number) => (v * Math.PI) / 180;
-    const φ1 = toRad(lat1), φ2 = toRad(lat2);
-    const Δφ = toRad(lat2 - lat1), Δλ = toRad(lon2 - lon1);
-    const a = Math.sin(Δφ/2)**2 + Math.cos(φ1)*Math.cos(φ2)*Math.sin(Δλ/2)**2;
-    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  };
-
-  const formatMeters = (m: number) => m < 1000 ? `${m.toFixed(0)} m` : `${(m/1000).toFixed(2)} km`;
-
-  // ✅ Navegar a Ventas con el cliente preseleccionado en el buscador
-  // Las validaciones (ubicación, saldo, bloqueo) las maneja la pantalla de Ventas
   const irAVentasConCliente = (item: any) => {
     router.push({
       pathname: '/(tabs)/ventas',
-      params: { buscar_cliente: item.nombre },
+      params: {
+        buscar_cliente: item.nombre,
+        desde_ruta_cliente_id: String(item.id),
+      },
     });
   };
 
@@ -314,8 +353,16 @@ export default function RutaOptimizada() {
       setGuardando(false);
     }
   };
+  const todosVisitados = clientes.length > 0 && clientes.every(
+    (cliente: any) => visitados[Number(cliente.id)] === true
+  );
 
-  const todosVisitados = clientes.length > 0 && clientes.every((cliente: any) => visitados[Number(cliente.id)] === true);
+  useEffect(() => {
+    if (clientes.length > 0) {
+      clientes.forEach((c: any) => {
+      });
+    }
+  }, [visitados, clientes, todosVisitados]);
 
   const solicitarCierreRuta = async () => {
     setBotonDeshabilitado(true);
@@ -328,7 +375,10 @@ export default function RutaOptimizada() {
       });
       const data = await res.json();
       if (res.ok) {
-        await AsyncStorage.multiSet([[STORAGE_KEYS.RUTA_CERRADA, 'true'], [STORAGE_KEYS.FECHA_ESTADO, getHoy()]]);
+        await AsyncStorage.multiSet([
+          [STORAGE_KEYS.RUTA_CERRADA, 'true'],
+          [STORAGE_KEYS.FECHA_ESTADO, getHoy()],
+        ]);
         Toast.show({ type: 'success', text1: '✅ Ruta finalizada', text2: 'La solicitud de cierre fue enviada correctamente' });
       } else {
         Toast.show({ type: 'error', text1: '❌ Error al finalizar ruta', text2: data.message || 'No se pudo enviar la solicitud' });
@@ -368,23 +418,16 @@ export default function RutaOptimizada() {
 
       {!visitados[item.id] ? (
         <View style={styles.botonesContainer}>
-          {/* Fila 1: Ver Ruta + Iniciar Venta */}
           <View style={{ flexDirection: 'row', gap: 8 }}>
             <TouchableOpacity style={styles.botonRuta} onPress={() => verRutaCliente(item)}>
               <Ionicons name="navigate-outline" size={18} color="#fff" />
               <Text style={styles.textoBoton}>Ver Ruta</Text>
             </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.botonVenta}
-              onPress={() => irAVentasConCliente(item)}
-            >
+            <TouchableOpacity style={styles.botonVenta} onPress={() => irAVentasConCliente(item)}>
               <Ionicons name="cart-outline" size={18} color="#fff" />
               <Text style={styles.textoBoton}>Iniciar Venta</Text>
             </TouchableOpacity>
           </View>
-
-          {/* Fila 2: Registrar Visita — ancho completo */}
           <TouchableOpacity style={styles.botonVisita} onPress={() => abrirModalVisita(item)}>
             <Ionicons name="checkmark-circle-outline" size={18} color="#fff" />
             <Text style={styles.textoBoton}>Registrar Visita</Text>
@@ -413,6 +456,7 @@ export default function RutaOptimizada() {
           <Text style={styles.info}>
             Clientes del día: {clientes.length} | Visitados:{' '}
             {Object.keys(visitados).filter((k) => visitados[Number(k)]).length}
+            {' '}· v{APP_VERSION}
           </Text>
 
           <View style={styles.searchWrap}>
@@ -448,8 +492,15 @@ export default function RutaOptimizada() {
             data={clientesFiltrados}
             keyExtractor={(item: any) => item.id.toString()}
             renderItem={renderItem}
-            contentContainerStyle={{ paddingBottom: 24 }}
-            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={obtenerDatos} colors={[Colors.light.primario]} tintColor={Colors.light.primario} />}
+            contentContainerStyle={{ paddingBottom: 16 }}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={obtenerDatos}
+                colors={[Colors.light.primario]}
+                tintColor={Colors.light.primario}
+              />
+            }
             ListEmptyComponent={
               clientes.length > 0 && (busqueda.trim() || soloNoVisitados) ? (
                 <View style={styles.empty}>
@@ -465,23 +516,26 @@ export default function RutaOptimizada() {
                 </View>
               )
             }
-            ListFooterComponent={
-              todosVisitados && clientes.length > 0 ? (
-                <TouchableOpacity
-                  style={[styles.finalizarBtn, botonDeshabilitado && { backgroundColor: '#aaa' }]}
-                  onPress={solicitarCierreRuta}
-                  disabled={botonDeshabilitado}
-                >
-                  <Ionicons name="flag-outline" size={18} color="#fff" />
-                  <Text style={styles.finalizarText}>{botonDeshabilitado ? 'Ruta Finalizada' : 'Finalizar Ruta'}</Text>
-                </TouchableOpacity>
-              ) : null
-            }
           />
+
+          {todosVisitados && (
+            <View style={styles.finalizarContainer}>
+              <TouchableOpacity
+                style={[styles.finalizarBtn, botonDeshabilitado && { backgroundColor: '#aaa' }]}
+                onPress={solicitarCierreRuta}
+                disabled={botonDeshabilitado}
+              >
+                <Ionicons name="flag-outline" size={18} color="#fff" />
+                <Text style={styles.finalizarText}>
+                  {botonDeshabilitado ? 'Ruta Finalizada' : 'Finalizar Ruta'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
         </>
       )}
 
-      {/* MODAL PARA REGISTRAR VISITA */}
+      {/* MODAL PARA REGISTRAR VISITA MANUAL */}
       <Modal animationType="slide" transparent visible={modalVisible} onRequestClose={() => setModalVisible(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContainer}>
@@ -557,7 +611,8 @@ const styles = StyleSheet.create({
   textoBoton: { color: '#fff', fontWeight: '700', fontSize: 13 },
   completadoContainer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 12, backgroundColor: '#ECFDF5', borderRadius: 8, borderWidth: 1, borderColor: '#10B981' },
   completado: { color: '#10B981', fontWeight: '700' },
-  finalizarBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 20, backgroundColor: '#8B008B', padding: 14, borderRadius: 10 },
+  finalizarContainer: { paddingTop: 8, paddingBottom: 8 },
+  finalizarBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#8B008B', padding: 14, borderRadius: 10 },
   finalizarText: { color: '#fff', fontWeight: 'bold' },
   empty: { paddingTop: 60, alignItems: 'center', gap: 12 },
   emptyTitle: { fontSize: 18, fontWeight: '700', color: '#111827' },

@@ -725,7 +725,18 @@ export default function IniciarVenta() {
 
       const token = await AsyncStorage.getItem('authToken');
 
-      const productosPayload = carrito
+      // ✅ Obtener ubicación para vincularConVisita en el backend
+      let _latitud: number | null = null;
+      let _longitud: number | null = null;
+      try {
+        const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        _latitud = pos.coords.latitude;
+        _longitud = pos.coords.longitude;
+      } catch {
+          // Sin ubicación — continuar sin coords
+      }
+
+    const productosPayload = carrito
         .filter((p) => p.producto_id && p.cantidad > 0)
         .map((p) => ({
           producto_id: p.producto_id,
@@ -758,6 +769,9 @@ export default function IniciarVenta() {
         client_tx_id: clientTxId,
         rechazos_ids: rechazosToSend,
         preventa_id: preventaInfo?.id ?? null,
+        latitud: _latitud,
+        longitud: _longitud,
+
       };
 
       if (/^\d{4}-\d{2}-\d{2}$/.test(venceStr)) body.fecha_vencimiento = venceStr;
@@ -901,12 +915,57 @@ export default function IniciarVenta() {
     }
   };
 
+    const registrarVisitaDesdeVenta = async (cId: number, ventaId?: number | null) => {
+    try {
+      const token = await AsyncStorage.getItem('authToken');
+      if (!token || !cId) return;
+ 
+      let latitud = null;
+      let longitud = null;
+      try {
+        const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        latitud = pos.coords.latitude;
+        longitud = pos.coords.longitude;
+      } catch {
+        // Sin ubicación disponible — registrar visita sin coords igualmente
+      }
+ 
+      await fetch(`${API_BASE_URL}/api/visitas`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          cliente_id: cId,
+          realizo_venta: true,
+          venta_id: ventaId ?? null,
+          motivo_no_venta: null,
+          observaciones: null,
+          latitud,
+          longitud,
+        }),
+      });
+    } catch (e) {
+      console.warn('No se pudo registrar visita automática:', e);
+    }
+  };
+
+
+
   const finalizarVenta = async (cambiosParaTicket: CambioTicketItem[] = [], rechazos: number[] = []) => {
     const result = await confirmarVenta(rechazos);
     if (!result) return;
 
-    justClosedRef.current = true;
-    await clearDraft();
+      //  Registrar visita automáticamente
+      if (clienteId) {
+        await registrarVisitaDesdeVenta(clienteId, result.venta_id);
+      }
+
+      justClosedRef.current = true;
+      await clearDraft();
+
 
     // ✅ Expandir lotes FIFO para desglose correcto en ticket
     const carritoConCategoria = expandirLotesFIFO(carrito);
@@ -1287,12 +1346,17 @@ export default function IniciarVenta() {
               {
                 text: 'SÍ',
                 onPress: async () => {
-                  // ✅ Crear la venta PRIMERO para obtener el venta_id
+                  //  Crear la venta PRIMERO para obtener el venta_id
                   // Los rechazos se registran después en el CambiosModal con ese id
                   const result = await confirmarVenta([]);
                   if (!result) return; // si falló la venta, no abrir modal
-
-                  setVentaIdParaCambios(result.venta_id ?? null); // guardar venta_id
+                  
+                    //  Registrar visita automáticamente
+                    if (clienteId) {
+                      await registrarVisitaDesdeVenta(clienteId, result.venta_id);
+                    }
+                  
+                  setVentaIdParaCambios(result.venta_id ?? null);
                   setCambiosVenta([]);
                   setCambiosTicket([]);
                   setRechazosIds([]);

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import {
   View, Text, FlatList, TextInput, TouchableOpacity, Alert, StyleSheet,
   RefreshControl, ActivityIndicator,
@@ -33,9 +33,11 @@ type MeResponse = {
   ventas_bloqueadas_desde?: string | null;
   ventas_bloqueadas_motivo?: string | null;
   ventas_bloqueadas_cierre_id?: number | null;
+  radio_ubicacion?: number | null;        // ✅ Radio configurable por vendedor
+  validar_ubicacion?: boolean | number;   // ✅ Si false, no se valida ubicación
 };
 
-const RADIUS_METERS = 100;
+// ✅ Radio configurable desde el backend — se lee de /api/me
 const money = (n: number | undefined | null) => `$${(Number(n ?? 0)).toFixed(2)}`;
 
 export default function Ventas() {
@@ -49,17 +51,52 @@ export default function Ventas() {
   const [ventasBloqueadasMotivo, setVentasBloqueadasMotivo] = useState<string | null>(null);
   const [ventasBloqueadasCierreId, setVentasBloqueadasCierreId] = useState<number | null>(null);
   const [checkingMe, setCheckingMe] = useState(false);
+  // ✅ Configuración de ubicación desde el backend
+  const [radioUbicacion, setRadioUbicacion] = useState<number>(200);
+  const [validarUbicacion, setValidarUbicacion] = useState<boolean>(true);
 
   const router = useRouter();
 
-  // ✅ Leer parámetro desde Rutas para preseleccionar cliente en buscador
-  const { buscar_cliente } = useLocalSearchParams();
+  // ✅ Leer parámetros desde RutaOptimizada
+  // buscar_cliente: pre-llena el buscador (texto)
+  // desde_ruta_cliente_id: ID numérico para auto-seleccionar el cliente correcto
+  const { buscar_cliente, desde_ruta_cliente_id } = useLocalSearchParams();
+
+  // ✅ Ref para evitar que el auto-disparo se ejecute más de una vez por navegación
+  const autoDisparadoRef = useRef(false);
 
   useEffect(() => {
     if (buscar_cliente && typeof buscar_cliente === 'string') {
       setBusqueda(buscar_cliente);
     }
-  }, [buscar_cliente]);
+    // Al llegar nuevos params, resetear el ref para permitir el auto-disparo
+    autoDisparadoRef.current = false;
+  }, [buscar_cliente, desde_ruta_cliente_id]);
+
+  // ✅ FIX: cuando llega desde_ruta_cliente_id, auto-disparar intentarIniciarVenta
+  // para el cliente correcto. Se ejecuta cuando los clientes ya están cargados.
+  // Respeta TODAS las validaciones: ubicación, saldo, bloqueo, draft pendiente.
+  useEffect(() => {
+    if (!desde_ruta_cliente_id || typeof desde_ruta_cliente_id !== 'string') return;
+    if (autoDisparadoRef.current) return; // solo una vez
+    if (clientes.length === 0) return; // esperar a que carguen
+
+    const id = Number(desde_ruta_cliente_id);
+    if (!id || isNaN(id)) return;
+
+    const clienteTarget = clientes.find(c => c.id === id);
+    if (!clienteTarget) return;
+
+    autoDisparadoRef.current = true;
+
+    // Pequeño delay para que la UI termine de renderizar
+    const timeout = setTimeout(() => {
+      intentarIniciarVenta(clienteTarget);
+    }, 350);
+
+    return () => clearTimeout(timeout);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [desde_ruta_cliente_id, clientes]);
 
   const encodeCliente = (c: Partial<Cliente> | null | undefined) => {
     if (!c || typeof c !== 'object') return '';
@@ -101,6 +138,9 @@ export default function Ventas() {
       setVentasBloqueadas(blocked);
       setVentasBloqueadasMotivo(me?.ventas_bloqueadas_motivo ?? null);
       setVentasBloqueadasCierreId(me?.ventas_bloqueadas_cierre_id ?? null);
+      // ✅ Leer configuración de ubicación
+      setRadioUbicacion(Number(me?.radio_ubicacion ?? 200));
+      setValidarUbicacion(me?.validar_ubicacion !== false && me?.validar_ubicacion !== 0);
       return { blocked, motivo: me?.ventas_bloqueadas_motivo ?? null, cierreId: me?.ventas_bloqueadas_cierre_id ?? null };
     } catch {
       setVentasBloqueadas(false);
@@ -271,7 +311,7 @@ export default function Ventas() {
     }
     const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
     const d = calcularDistancia(pos.coords.latitude, pos.coords.longitude, cliente.latitud, cliente.longitud);
-    return { ok: d <= RADIUS_METERS, distancia: d };
+    return { ok: d <= radioUbicacion, distancia: d };
   };
 
   const confirmarInicioVenta = (cliente: Cliente) => {
@@ -325,7 +365,7 @@ export default function Ventas() {
       const { ok, distancia } = await checkUbicacion(cliente);
       if (!ok) {
         if (distancia !== null) {
-          Alert.alert('Ubicación incorrecta', `Debes estar cerca del cliente para iniciar la venta.\nTe encuentras a ${formatMeters(distancia)} (máx. ${RADIUS_METERS} m).`);
+          Alert.alert('Ubicación incorrecta', `Debes estar cerca del cliente.\n\nDistancia detectada: ${formatMeters(distancia)}\nMáximo permitido: ${radioUbicacion} m\n\nSi estás en el lugar correcto, activa el GPS, espera unos segundos y vuelve a intentar.`);
         }
         return;
       }
